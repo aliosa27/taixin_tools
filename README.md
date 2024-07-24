@@ -8,3 +8,5 @@ this is just a python wrapper for hgpriv
  the driver loads on load. 
 
 theres a bunch of other stuff here, there is an rssi graph which was the reason i started this in the first place, when testing out the usb based modules.
+
+copy the configs in etc to etc on your host. 
