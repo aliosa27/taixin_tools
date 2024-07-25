@@ -699,7 +699,7 @@ def save_settings(settings):
 
 def apply_settings(settings):
     for key, value in settings.items():
-        command = f"/sbin/hgpriv hg0 set {key} {value}"
+        command = f"/sbin/hgpriv hg0 set {key}={value}"
         run_command(command)
 
 def get_current_network_settings():
