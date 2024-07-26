@@ -42,6 +42,15 @@ DEFAULT_SETTINGS_FILE = os.path.join(CONFIG_DIR, 'hgicf-template.conf')
 WIFI_SSID_FILE = '/boot/wifi.ssid'
 WIFI_PASS_FILE = '/boot/wifi.pass'
 
+MODE_FILE = os.path.join(CONFIG_DIR, 'mode.conf')
+MODES = ['hgpriv', 'libnetat']
+DEFAULT_MODE = 'hgpriv'
+
+# Command remapping table for libnetat
+COMMAND_REMAP = {
+    'signal': 'rssi'
+}
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -124,7 +133,7 @@ HTML_TEMPLATE = """
                 </form>
                 <h2>Response:</h2>
                 <pre id="response" class="bg-light p-3 border rounded"></pre>
-                <canvas id="signalChart" width="400" height="200"></canvas>
+                <canvas id="signalChart" width="400" height="200" class="my-4"></canvas>
             </div>
             <div class="tab-pane fade" id="station-settings">
                 <h2>Station Settings</h2>
@@ -145,8 +154,7 @@ HTML_TEMPLATE = """
                         <label for="key_mgmt">Key Management:</label>
                         <select class="form-control" id="key_mgmt" name="key_mgmt" onchange="validateKeyMgmt()">
                             <option value="WPA-PSK">WPA-PSK</option>
-                            <option value="NONE">NONE</option>
-                        </select>
+                            <option value="NONE">NONE</select>
                     </div>
                     <div class="form-group">
                         <label for="tx_mcs">Tx MCS:</label>
@@ -235,6 +243,16 @@ HTML_TEMPLATE = """
                     </div>
                     <button type="submit" class="btn btn-primary">Upload</button>
                 </form>
+                <h3>Mode Setting</h3>
+                <form id="modeSettingForm">
+                    <div class="form-group">
+                        <label for="mode_select">Mode:</label>
+                        <select class="form-control" id="mode_select" name="mode_select" onchange="changeMode()">
+                            <option value="hgpriv">hgpriv</option>
+                            <option value="libnetat">libnetat</option>
+                        </select>
+                    </div>
+                </form>
             </div>
             <div class="tab-pane fade" id="wifi-settings">
                 <h2>WiFi Settings</h2>
@@ -295,7 +313,7 @@ HTML_TEMPLATE = """
         function checkSignal() {
             const command = document.getElementById('command').value;
             const intervalGroup = document.getElementById('intervalGroup');
-            if (command === 'signal') {
+            if (command === 'signal' || command === 'rssi') {
                 intervalGroup.style.display = 'block';
                 setupChart();
             } else {
@@ -315,7 +333,7 @@ HTML_TEMPLATE = """
             const interval = document.getElementById('interval').value;
             const url = `/command?cmd=${commandType}&param=${encodeURIComponent(command)}${commandType === 'set' ? '&value=' + encodeURIComponent(value) : ''}`;
             
-            if (command === 'signal') {
+            if (command === 'signal' || command === 'rssi') {
                 clearInterval(rssiInterval);
                 fetchAndUpdateSignal(url);
                 rssiInterval = setInterval(() => fetchAndUpdateSignal(url), interval * 1000);
@@ -333,7 +351,7 @@ HTML_TEMPLATE = """
             fetch(url)
                 .then(response => response.json())
                 .then(data => {
-                    const responseText = data.response.replace(/^RESP:\\d+\\s*/, '');
+                    const responseText = data.response.replace(/^RESP:\\d+\\s*/, '').trim();
                     document.getElementById('response').innerText = responseText;
                     const matches = responseText.match(/-?\\d+/);
                     if (matches) {
@@ -599,7 +617,7 @@ HTML_TEMPLATE = """
                             connStateElement.style.color = 'green';
                             break;
                         default:
-                            connStateElement.textContent = 'UNKNOWN';
+                            connStateElement.textContent = data.response;
                             connStateElement.style.color = 'black';
                             break;
                     }
@@ -652,7 +670,7 @@ HTML_TEMPLATE = """
 
                     const lines = responseText.split('\\n').slice(1); // Ignore the first line
                     lines.forEach(line => {
-                        const [bssid, ssid, encryption, frequency, signal] = line.split(' ');
+                        const [bssid, ssid, encryption, frequency, signal] = line.split('\t');
                         const row = document.createElement('tr');
                         row.innerHTML = `<td>${bssid}</td><td>${ssid}</td><td>${encryption}</td><td>${frequency}</td><td>${signal}</td>`;
                         surveyResults.appendChild(row);
@@ -660,14 +678,44 @@ HTML_TEMPLATE = """
                 });
         }
 
+        function loadMode() {
+            fetch('/load_mode')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        document.getElementById('mode_select').value = data.mode;
+                    }
+                });
+        }
+
+        function changeMode() {
+            const mode = document.getElementById('mode_select').value;
+            fetch('/switch_mode', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ mode })
+            }).then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Mode switched successfully.');
+                } else {
+                    alert('Failed to switch mode.');
+                }
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', updateCommands);
         document.addEventListener('DOMContentLoaded', validateKeyMgmt);
         document.addEventListener('DOMContentLoaded', toggleApStaFields);
         document.addEventListener('DOMContentLoaded', loadStationSettings);
         document.addEventListener('DOMContentLoaded', loadWiFiSettings);
+        document.addEventListener('DOMContentLoaded', loadMode);
         document.addEventListener('DOMContentLoaded', () => {
             updateConnState();
             connStateInterval = setInterval(updateConnState, 5000);
+            sendCommand('get', 'signal');
         });
     </script>
     <script src="/static/jquery-3.5.1.min.js"></script>
@@ -687,6 +735,23 @@ def run_command(command):
         output = e.output.decode()
     return output
 
+def run_libnetat_command(command, cmd_type):
+    if cmd_type == 'get':
+        command = f"at+{command}?"
+    elif cmd_type == 'set':
+        command = f"at+{command}"
+    try:
+        output = subprocess.check_output(f"/sbin/libnetat hg0 {command}", shell=True, stderr=subprocess.STDOUT).decode()
+        if 'valid cmds:' in output:
+            return "Invalid command in libnetat mode"
+        # Extract the actual value from the response
+        match = re.search(r'\+\w+:(.+?)\nOK', output, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return output.strip()
+    except subprocess.CalledProcessError as e:
+        return e.output.decode()
+
 def load_last_settings():
     if os.path.exists(LAST_SETTINGS_FILE):
         with open(LAST_SETTINGS_FILE, 'r') as f:
@@ -698,9 +763,14 @@ def save_settings(settings):
         json.dump(settings, f)
 
 def apply_settings(settings):
+    mode = load_mode()
     for key, value in settings.items():
-        command = f"/sbin/hgpriv hg0 set {key}={value}"
-        run_command(command)
+        if mode == 'hgpriv':
+            command = f"/sbin/hgpriv hg0 set {key}={value}"
+            run_command(command)
+        elif mode == 'libnetat':
+            command = f"{key}={value}"
+            run_libnetat_command(command, 'set')
 
 def get_current_network_settings():
     ip_address = run_command("ifconfig hg0 | grep 'inet ' | awk '{print $2}'").strip()
@@ -755,9 +825,23 @@ def save_wifi_settings(ssid, password):
     with open(WIFI_PASS_FILE, 'w') as f:
         f.write(password + '\n')
 
+def load_mode():
+    if os.path.exists(MODE_FILE):
+        with open(MODE_FILE, 'r') as f:
+            return f.read().strip()
+    return DEFAULT_MODE
+
+def save_mode(mode):
+    with open(MODE_FILE, 'w') as f:
+        f.write(mode + '\n')
+
 @app.route('/')
 def index():
-    current_settings = {param: run_command(f"/sbin/hgpriv hg0 get {param}").strip() for param in ['ssid', 'bssid', 'txpower', 'bss_bw', 'conn_state']}
+    mode = load_mode()
+    if mode == 'hgpriv':
+        current_settings = {param: run_command(f"/sbin/hgpriv hg0 get {param}").strip() for param in ['ssid', 'bssid', 'txpower', 'bss_bw', 'conn_state']}
+    elif mode == 'libnetat':
+        current_settings = {param: run_libnetat_command(f"{param}", 'get').strip() for param in ['ssid', 'bssid', 'txpower', 'bss_bw', 'conn_state']}
     current_network_settings = get_current_network_settings()
     return render_template_string(HTML_TEMPLATE, set_commands=SET_COMMANDS, get_commands=GET_COMMANDS, current_settings=current_settings, current_network_settings=current_network_settings)
 
@@ -767,14 +851,29 @@ def handle_command():
     param = request.args.get('param')
     value = request.args.get('value')
 
-    if cmd_type == 'get':
-        command = f"/sbin/hgpriv hg0 get {param}"
-    elif cmd_type == 'set':
-        command = f"/sbin/hgpriv hg0 set {param}={value}"
+    mode = load_mode()
+    if mode == 'hgpriv':
+        if cmd_type == 'get':
+            command = f"/sbin/hgpriv hg0 get {param}"
+        elif cmd_type == 'set':
+            command = f"/sbin/hgpriv hg0 set {param}={value}"
+        else:
+            return jsonify({"response": "Invalid command type"})
+        output = run_command(command)
+    elif mode == 'libnetat':
+        # Remap command if necessary
+        if param in COMMAND_REMAP:
+            param = COMMAND_REMAP[param]
+        if cmd_type == 'get':
+            command = f"{param}?"
+        elif cmd_type == 'set':
+            command = f"{param}={value}"
+        else:
+            return jsonify({"response": "Invalid command type"})
+        output = run_libnetat_command(command, cmd_type)
     else:
-        return jsonify({"response": "Invalid command type"})
+        return jsonify({"response": "Invalid mode"})
 
-    output = run_command(command)
     return jsonify({"response": output})
 
 @app.route('/station_settings', methods=['POST'])
@@ -813,9 +912,15 @@ def apply_last_settings():
 
 @app.route('/quick_pair', methods=['POST'])
 def quick_pair():
-    run_command("/sbin/hgpriv hg0 set pairing=1")
-    time.sleep(20)
-    run_command("/sbin/hgpriv hg0 set pairing=0")
+    mode = load_mode()
+    if mode == 'hgpriv':
+        run_command("/sbin/hgpriv hg0 set pairing=1")
+        time.sleep(20)
+        run_command("/sbin/hgpriv hg0 set pairing=0")
+    elif mode == 'libnetat':
+        run_libnetat_command("pairing=1", 'set')
+        time.sleep(20)
+        run_libnetat_command("pairing=0", 'set')
     return jsonify({"status": "success"})
 
 @app.route('/reboot', methods=['POST'])
@@ -825,7 +930,7 @@ def reboot_system():
 
 @app.route('/run_command', methods=['POST'])
 def run_system_command():
-    command = request.json.get('command')
+    command = request.json.get('syscommand')
     if command:
         output = run_command(command)
         return jsonify({"status": "success", "output": output})
@@ -865,6 +970,19 @@ def upload_firmware():
         run_command("reboot")
         return jsonify({"status": "success"})
     return jsonify({"status": "failure"})
+
+@app.route('/switch_mode', methods=['POST'])
+def switch_mode():
+    mode = request.json.get('mode')
+    if mode in MODES:
+        save_mode(mode)
+        return jsonify({"status": "success"})
+    return jsonify({"status": "failure"})
+
+@app.route('/load_mode', methods=['GET'])
+def load_mode_route():
+    mode = load_mode()
+    return jsonify({"status": "success", "mode": mode})
 
 if __name__ == '__main__':
     last_settings = load_last_settings()
