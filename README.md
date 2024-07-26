@@ -3,7 +3,14 @@ a web gui for taixin based halow devices
 
 this is just a python wrapper for hgpriv, I will modify it to support running at commands directly so it can be ported to an esp32 
 
- it expects that hgpriv is installed in /sbin
+ it expects that hgpriv or libnetat installed in /sbin
+ the mode can be switched in /etc/mode.conf or via the web gui on the system page.
+
+ you will need to compile my version of libnetat, it adds support to run at commands from the command line and a help message
+
+ libnetat support is basic, rssi/connection status/etc work. 
+ site survey does not work in this mode yet.
+ 
  it also expects that you have copied the config files over to /etc
  it allllso expects that you leave the interface at its default name of hg0(will change this in the future)
 
