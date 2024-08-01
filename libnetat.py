@@ -2,9 +2,11 @@ import socket
 import struct
 import random
 import time
+import sys
 
-NETAT_BUFF_SIZE = 1024
+NETAT_BUFF_SIZE = 4096  # Increase buffer size to handle longer commands
 NETAT_PORT = 56789
+NETLOG_PORT = 64320
 
 WNB_NETAT_CMD_SCAN_REQ = 1
 WNB_NETAT_CMD_SCAN_RESP = 2
@@ -28,12 +30,29 @@ class WnbNetatCmd:
         data = data[15:]
         return cls(cmd, dest, src, data)
 
+class WnbModuleNetlog:
+    def __init__(self, addr, cookie, ip, timestamp, port):
+        self.addr = addr
+        self.cookie = cookie
+        self.ip = ip
+        self.timestamp = timestamp
+        self.port = port
+
+    def to_bytes(self):
+        return struct.pack('!6s6sIIBH', self.addr, self.cookie, self.ip, self.timestamp, 0, self.port)
+
+    @classmethod
+    def from_bytes(cls, data):
+        addr, cookie, ip, timestamp, _, port = struct.unpack('!6s6sIIBH', data[:23])
+        return cls(addr, cookie, ip, timestamp, port)
+
 class NetatMgr:
-    def __init__(self, ifname):
+    def __init__(self, ifname, port=NETAT_PORT):
         self.sock = None
         self.dest = b'\xff\xff\xff\xff\xff\xff'
         self.cookie = self.random_bytes(6)
         self.recvbuf = bytearray(NETAT_BUFF_SIZE)
+        self.port = port
         self.init_socket(ifname)
 
     def init_socket(self, ifname):
@@ -41,14 +60,14 @@ class NetatMgr:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, 25, ifname.encode())
 
-        local_addr = ('', NETAT_PORT)
+        local_addr = ('', self.port)
         self.sock.bind(local_addr)
 
     def random_bytes(self, length):
         return bytes([random.randint(0, 255) for _ in range(length)])
 
     def sock_send(self, data):
-        dest = ('<broadcast>', NETAT_PORT)
+        dest = ('<broadcast>', self.port)
         self.sock.sendto(data, dest)
 
     def sock_recv(self, timeout_ms):
@@ -67,12 +86,20 @@ class NetatMgr:
         scan_cmd = WnbNetatCmd(WNB_NETAT_CMD_SCAN_REQ, b'\xff\xff\xff\xff\xff\xff', self.cookie)
         self.sock_send(scan_cmd.to_bytes())
 
+    def netlog_discover(self):
+        self.cookie = self.random_bytes(6)
+        ip = struct.unpack("!I", socket.inet_aton('255.255.255.255'))[0]
+        timestamp = int(time.time())
+        netlog_pkt = WnbModuleNetlog(b'\xff\xff\xff\xff\xff\xff', self.cookie, ip, timestamp, NETLOG_PORT)
+        self.sock_send(netlog_pkt.to_bytes())
+
     def netat_send(self, atcmd):
-        len_cmd = len(atcmd)
         cmd = WnbNetatCmd(WNB_NETAT_CMD_AT_REQ, self.dest, self.cookie, atcmd.encode())
         self.sock_send(cmd.to_bytes())
 
-    def netat_recv(self, timeout_ms):
+    def netat_recv(self, timeout_ms, expecting_response=False):
+        response = b""
+        devices = []
         while True:
             data = self.sock_recv(timeout_ms)
             if data is None:
@@ -81,37 +108,150 @@ class NetatMgr:
             cmd = WnbNetatCmd.from_bytes(data)
             if cmd.dest == self.cookie:
                 if cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
-                    self.dest = cmd.src
+                    devices.append(cmd.src)
                 elif cmd.cmd == WNB_NETAT_CMD_AT_RESP:
-                    return cmd.data.decode()
-        return None
+                    response += cmd.data
+                    if not expecting_response:
+                        break
 
-def main(ifname, command=None):
-    mgr = NetatMgr(ifname)
-    mgr.netat_scan()
+        if expecting_response:
+            return response.decode()
+        else:
+            return devices
+
+    def netlog_recv(self, timeout_ms):
+        response = b""
+        devices = []
+        while True:
+            data = self.sock_recv(timeout_ms)
+            if data is None:
+                break
+
+            try:
+                netlog = WnbModuleNetlog.from_bytes(data)
+                devices.append(netlog.addr)
+            except Exception as e:
+                print(f"Error parsing netlog response: {e}")
+
+        return devices
+
+def select_device(devices):
+    if len(devices) == 1:
+        return devices[0]
+    elif len(devices) > 1:
+        print("Select a device to send commands to:")
+        for idx, device in enumerate(devices):
+            print(f"{idx + 1}. {':'.join(f'{b:02x}' for b in device)}")
+        choice = int(input("Enter the device number: ")) - 1
+        return devices[choice]
+    else:
+        print("No devices found.")
+        sys.exit(1)
+
+def parse_mac_address(mac_str):
+    try:
+        return bytes(int(x, 16) for x in mac_str.split(':'))
+    except ValueError:
+        print("Invalid MAC address format")
+        sys.exit(1)
+
+def netlog(ifname):
+    mgr = NetatMgr(ifname, port=NETLOG_PORT)
+    mgr.netlog_discover()
     time.sleep(1)  # wait for the scan to complete
-    mgr.netat_recv(1000)
+    devices = mgr.netlog_recv(1000)
+    if devices:
+        selected_device = select_device(devices)
+        mgr.dest = selected_device
+        print(f"Selected device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
+
+        # Send 02 command
+        mgr.netat_send("02")
+        response = mgr.netat_recv(1000, expecting_response=True)
+        if response:
+            print(response)
+        else:
+            print("Invalid device")
+    else:
+        print("No devices found.")
+
+def main(ifname, command=None, dest_mac=None):
+    if command == "netlog":
+        netlog(ifname)
+        return
+
+    mgr = NetatMgr(ifname)
+    
+    if command == "scan":
+        mgr.netat_scan()
+        time.sleep(1)  # wait for the scan to complete
+        devices = mgr.netat_recv(1000)
+        if devices:
+            for device in devices:
+                print(':'.join(f'{b:02x}' for b in device))
+        else:
+            print("No devices found.")
+        return
+
+    if dest_mac:
+        mgr.dest = parse_mac_address(dest_mac)
+    else:
+        while True:
+            mgr.netat_scan()
+            time.sleep(1)  # wait for the scan to complete
+            devices = mgr.netat_recv(1000)
+
+            if devices:
+                mgr.dest = select_device(devices)
+                break
+            else:
+                print("No devices found. Retrying...")
+                time.sleep(1)
 
     if command:
         mgr.netat_send(command)
-        response = mgr.netat_recv(1000)
-        print(response)
+        response = mgr.netat_recv(1000, expecting_response=True)
+        if response:
+            print(response)
+        else:
+            print("Invalid device")
     else:
         while True:
             try:
-                input_cmd = input("\n>: ")
-                if input_cmd.lower().startswith("at"):
+                input_cmd = input("\n>: ").strip().lower()
+                if input_cmd == "exit":
+                    break
+                elif input_cmd == "scan":
+                    mgr.netat_scan()
+                    time.sleep(1)
+                    devices = mgr.netat_recv(1000)
+                    if devices:
+                        for device in devices:
+                            print(':'.join(f'{b:02x}' for b in device))
+                        mgr.dest = select_device(devices)
+                    else:
+                        print("No devices found.")
+                elif input_cmd == "device":
+                    print(f"Current destination MAC address: {':'.join(f'{b:02x}' for b in mgr.dest)}")
+                elif input_cmd.startswith("at"):
                     mgr.netat_send(input_cmd)
-                    response = mgr.netat_recv(1000)
-                    print(response)
+                    response = mgr.netat_recv(1000, expecting_response=True)
+                    if response:
+                        print(response)
+                    else:
+                        print("Invalid device")
+                elif input_cmd.startswith("setmac"):
+                    _, mac_str = input_cmd.split()
+                    mgr.dest = parse_mac_address(mac_str)
+                    print(f"Destination MAC address set to {':'.join(f'{b:02x}' for b in mgr.dest)}")
             except KeyboardInterrupt:
                 break
 
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) < 2:
-        print("Usage: {} <interface> [command]".format(sys.argv[0]))
+        print("Usage: {} <interface> [command] [dest_mac]".format(sys.argv[0]))
     else:
         ifname = sys.argv[1]
         command = sys.argv[2] if len(sys.argv) > 2 else None
-        main(ifname, command)
+        dest_mac = sys.argv[3] if len(sys.argv) > 3 else None
+        main(ifname, command, dest_mac)
