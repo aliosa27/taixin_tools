@@ -16,10 +16,10 @@
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
 
-#define MAC2STR(a) (a)[0]&0xff, (a)[1]&0xff, (a)[2]&0xff, (a)[3]&0xff, (a)[4]&0xff, (a)[5]&0xff
+#define MAC2STR(a) a[0], a[1], a[2], a[3], a[4], a[5]
 #define MACSTR     "%02x:%02x:%02x:%02x:%02x:%02x"
 
-#define NETAT_BUFF_SIZE (1024)
+#define NETAT_BUFF_SIZE (4096)
 #define NETAT_PORT      (56789)
 
 enum WNB_NETAT_CMD {
@@ -82,7 +82,6 @@ static int sock_recv(int sock, struct sockaddr_in *dest, char *data, int len, in
         ret = recvfrom(sock, data, len, 0, (struct sockaddr *)dest, &addr_len);
     }
 
-    //printf("sock_recv, len=%d\r\n", ret);
     return ret;
 }
 
@@ -114,7 +113,6 @@ static void netat_send(char *atcmd)
         memcpy(cmd->data, atcmd, strlen(atcmd));
         sock_send(libnetat.sock, (char *)cmd, strlen(atcmd) + sizeof(struct wnb_netat_cmd));
         free(cmd);
-        //printf("send atcmd: %s\r\n", atcmd);
     }
 }
 
@@ -130,7 +128,6 @@ static int netat_recv(char *buff, int len, int tmo)
         ret = sock_recv(libnetat.sock, &from, libnetat.recvbuf, NETAT_BUFF_SIZE, tmo);
         if (ret >= sizeof(struct wnb_netat_cmd)) {
             cmd = (struct wnb_netat_cmd *)libnetat.recvbuf;
-            //printf("recv type=%d\r\n", cmd->cmd);
             if (memcmp(cmd->dest, libnetat.cookie, 6) == 0) {
                 switch (cmd->cmd) {
                     case WNB_NETAT_CMD_SCAN_RESP:
@@ -151,6 +148,7 @@ static int netat_recv(char *buff, int len, int tmo)
         }
     } while (ret > 0);
     if (buff) { buff[off] = 0; }
+    return off;
 }
 
 int libnetat_init(char *ifname)
@@ -216,6 +214,70 @@ int libnetat_send(char *atcmd, char *resp_buff, int buf_size)
     return netat_recv(resp_buff, buf_size, 10);
 }
 
+void parse_mac_address(char *mac_str, char *mac) {
+    int values[6];
+    if (sscanf(mac_str, MACSTR, &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) == 6) {
+        for (int i = 0; i < 6; i++) {
+            mac[i] = (char)values[i];
+        }
+    } else {
+        printf("Invalid MAC address format\n");
+        exit(1);
+    }
+}
+
+void handle_scan(int interactive) {
+    netat_scan();
+    char devices[128][6];
+    int num_devices = 0;
+
+    int ret;
+    struct sockaddr_in from;
+    struct wnb_netat_cmd *cmd;
+
+    do {
+        memset(libnetat.recvbuf, 0, NETAT_BUFF_SIZE);
+        ret = sock_recv(libnetat.sock, &from, libnetat.recvbuf, NETAT_BUFF_SIZE, 1000);
+        if (ret >= sizeof(struct wnb_netat_cmd)) {
+            cmd = (struct wnb_netat_cmd *)libnetat.recvbuf;
+            if (cmd->cmd == WNB_NETAT_CMD_SCAN_RESP) {
+                if (num_devices < 128) {
+                    memcpy(devices[num_devices++], cmd->src, 6);
+                }
+            }
+        }
+    } while (ret > 0);
+
+    if (interactive) {
+        if (num_devices == 1) {
+            memcpy(libnetat.dest, devices, 6);
+        } else if (num_devices > 1) {
+            printf("Select a device to send commands to:\n");
+            for (int i = 0; i < num_devices; i++) {
+                printf("%d. " MACSTR "\n", i + 1, MAC2STR(devices[i]));
+            }
+            printf("Enter the device number: ");
+            fflush(stdout);
+            int choice;
+            scanf("%d", &choice);
+            if (choice >= 1 && choice <= num_devices) {
+                memcpy(libnetat.dest, devices[choice - 1], 6);
+            } else {
+                printf("Invalid choice.\n");
+                exit(1);
+            }
+        } else {
+            printf("No devices found.\n");
+            exit(1);
+        }
+    } else {
+        // Non-interactive mode: print all detected devices
+        for (int i = 0; i < num_devices; i++) {
+            printf(MACSTR "\n", MAC2STR(devices[i]));
+        }
+    }
+}
+
 #if 1 //sample code
 int main(int argc, char *argv[])
 {
@@ -224,7 +286,7 @@ int main(int argc, char *argv[])
     char response[1024];
 
     if (argc < 2) {
-        printf("Usage: %s <interface> [command]\n", argv[0]);
+        printf("Usage: %s <interface> [command] [dest_mac]\n", argv[0]);
         return -1;
     }
 
@@ -238,23 +300,55 @@ int main(int argc, char *argv[])
     if (argc == 3) {
         // Non-interactive mode
         char *command = argv[2];
-        libnetat_send(command, response, sizeof(response));
-        printf("%s", response);
+        if (strcmp(command, "scan") == 0) {
+            handle_scan(0);
+        } else {
+            libnetat_send(command, response, sizeof(response));
+            printf("%s", response);
+        }
+        return 0;
+    } else if (argc == 4) {
+        // Non-interactive mode with MAC address setting
+        char *command = argv[2];
+        char *mac_str = argv[3];
+        parse_mac_address(mac_str, libnetat.dest);
+        if (strcmp(command, "scan") == 0) {
+            handle_scan(0);
+        } else {
+            libnetat_send(command, response, sizeof(response));
+            printf("%s", response);
+        }
         return 0;
     }
 
     // Interactive mode
     while (1) {
         memset(input, 0, sizeof(input));
-        printf("\r\n>:");
-        fflush(stdin);
+        printf(">: ");
+        fflush(stdout);
         fgets(input, sizeof(input), stdin);
         if (strlen(input) > 0) {
-            if (strncmp(input, "at", 2) == 0 || strncmp(input, "AT", 2) == 0) {
+            input[strcspn(input, "\n")] = 0; // Remove newline character
+
+            if (strcmp(input, "exit") == 0) {
+                break;
+            } else if (strcmp(input, "scan") == 0) {
+                handle_scan(1);
+            } else if (strcmp(input, "device") == 0) {
+                printf("Current destination MAC address: " MACSTR "\n", MAC2STR(libnetat.dest));
+            } else if (strncmp(input, "setmac", 6) == 0) {
+                char mac_str[18];
+                sscanf(input + 7, "%17s", mac_str);
+                parse_mac_address(mac_str, libnetat.dest);
+                printf("Destination MAC address set to " MACSTR "\n", MAC2STR(libnetat.dest));
+            } else if (strncmp(input, "at", 2) == 0 || strncmp(input, "AT", 2) == 0) {
                 libnetat_send(input, response, sizeof(response));
                 printf("%s", response);
             }
         }
     }
+
+    close(libnetat.sock);
+    return 0;
 }
 #endif
