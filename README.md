@@ -15,6 +15,10 @@ libnetat/.py interfacename for interactive mode
 libnetat/.py interfacename scan - returns mac addresses of devices
 libnetat/.py interfacename at+command 00:00:00:00:06:33 - send command to dst mac on the interface specified. 
 
+
+added a loadconfig function to the python impementation(testing the c version now) so you can create a file
+with the command and setting, ie ssid=blah and it will run everything you have in a file. Makes things super easy. 
+remove the at+ as the code sends that .
 to switch devices in interactive mode, run scan or setmac. it will default to the first device it detects. you can run showmac to verify your connected to the right device 
 
 theres a python implementation of hgpriv as well but currently it can only set things
