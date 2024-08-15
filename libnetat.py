@@ -105,28 +105,32 @@ class NetatMgr:
             if data is None:
                 break
 
-            cmd = WnbNetatCmd.from_bytes(data)
-            if cmd.dest == self.cookie:
-                if cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
-                    devices.append(cmd.src)
-                elif cmd.cmd == WNB_NETAT_CMD_AT_RESP:
-                    response += cmd.data
+            try:
+                cmd = WnbNetatCmd.from_bytes(data)
+                if cmd.dest == self.cookie:
+                    if cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
+                        devices.append(cmd.src)
+                    elif cmd.cmd == WNB_NETAT_CMD_AT_RESP:
+                        response += cmd.data
                     if not expecting_response:
                         break
+            except Exception as e:
+                print(f"Error parsing data: {e}")
 
         if expecting_response:
-            return response.decode()
+            if response:
+                return response.decode()
+            else:
+                print("No response from device or command not recognized.")
         else:
             return devices
 
     def netlog_recv(self, timeout_ms):
-        response = b""
         devices = []
         while True:
             data = self.sock_recv(timeout_ms)
             if data is None:
                 break
-
             try:
                 netlog = WnbModuleNetlog.from_bytes(data)
                 devices.append(netlog.addr)
@@ -155,6 +159,20 @@ def parse_mac_address(mac_str):
         print("Invalid MAC address format")
         sys.exit(1)
 
+def load_config_from_file(file_path):
+    config_commands = []
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if line and '=' in line:
+                    cmd, value = line.split('=', 1)
+                    config_commands.append((cmd, value))
+    except FileNotFoundError:
+        print(f"Error: Config file {file_path} not found.")
+        sys.exit(1)
+    return config_commands
+
 def netlog(ifname):
     mgr = NetatMgr(ifname, port=NETLOG_PORT)
     mgr.netlog_discover()
@@ -175,17 +193,17 @@ def netlog(ifname):
     else:
         print("No devices found.")
 
-def main(ifname, command=None, dest_mac=None):
+def main(ifname, command=None, dest_mac=None, config_file=None):
+    mgr = NetatMgr(ifname)
+
     if command == "netlog":
         netlog(ifname)
         return
 
-    mgr = NetatMgr(ifname)
-    
     if command == "scan":
         mgr.netat_scan()
-        time.sleep(1)  # wait for the scan to complete
-        devices = mgr.netat_recv(1000)
+        time.sleep(2)  # Wait for responses
+        devices = mgr.netat_recv(2000)
         if devices:
             for device in devices:
                 print(':'.join(f'{b:02x}' for b in device))
@@ -207,6 +225,19 @@ def main(ifname, command=None, dest_mac=None):
             else:
                 print("No devices found. Retrying...")
                 time.sleep(1)
+
+    if config_file:
+        config_commands = load_config_from_file(config_file)
+        for cmd, value in config_commands:
+            full_command = f"AT+{cmd}={value}"
+            print(f"Sending: {cmd} = {value}")  # Display parameter and value
+            mgr.netat_send(full_command)
+            response = mgr.netat_recv(1000, expecting_response=True)
+            if response:
+                print(response)
+            else:
+                print(f"Command {full_command} failed or no response received.")
+        return
 
     if command:
         mgr.netat_send(command)
@@ -244,14 +275,27 @@ def main(ifname, command=None, dest_mac=None):
                     _, mac_str = input_cmd.split()
                     mgr.dest = parse_mac_address(mac_str)
                     print(f"Destination MAC address set to {':'.join(f'{b:02x}' for b in mgr.dest)}")
+                elif input_cmd.startswith("loadconfig"):
+                    _, file_path = input_cmd.split()
+                    config_commands = load_config_from_file(file_path)
+                    for cmd, value in config_commands:
+                        full_command = f"AT+{cmd}={value}"
+                        print(f"Sending: {cmd} = {value}")  # Display parameter and value
+                        mgr.netat_send(full_command)
+                        response = mgr.netat_recv(1000, expecting_response=True)
+                        if response:
+                            print(response)
+                        else:
+                            print(f"Command {full_command} failed or no response received.")
             except KeyboardInterrupt:
                 break
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: {} <interface> [command] [dest_mac]".format(sys.argv[0]))
+        print("Usage: {} <interface> [command] [dest_mac] [config_file]".format(sys.argv[0]))
     else:
         ifname = sys.argv[1]
         command = sys.argv[2] if len(sys.argv) > 2 else None
         dest_mac = sys.argv[3] if len(sys.argv) > 3 else None
-        main(ifname, command, dest_mac)
+        config_file = sys.argv[4] if len(sys.argv) > 4 else None
+        main(ifname, command, dest_mac, config_file)
