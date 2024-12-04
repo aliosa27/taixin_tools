@@ -1,9 +1,12 @@
+import logging
 import socket
 import struct
 import random
 import time
 import sys
+import argparse  # Added for command-line argument parsing
 
+# Constants
 NETAT_BUFF_SIZE = 4096  # Increase buffer size to handle longer commands
 NETAT_PORT = 56789
 NETLOG_PORT = 64320
@@ -69,22 +72,25 @@ class NetatMgr:
     def sock_send(self, data):
         dest = ('<broadcast>', self.port)
         self.sock.sendto(data, dest)
+        logging.debug(f"Sent data to {dest}: {data}")
 
     def sock_recv(self, timeout_ms):
         self.sock.settimeout(timeout_ms / 1000)
         try:
             data, addr = self.sock.recvfrom(NETAT_BUFF_SIZE)
+            logging.debug(f"Received data from {addr}: {data}")
             return data
         except socket.timeout:
             return None
         except Exception as e:
-            print(f"Error receiving data: {e}")
+            logging.error(f"Error receiving data: {e}")
             return None
 
     def netat_scan(self):
         self.cookie = self.random_bytes(6)
         scan_cmd = WnbNetatCmd(WNB_NETAT_CMD_SCAN_REQ, b'\xff\xff\xff\xff\xff\xff', self.cookie)
         self.sock_send(scan_cmd.to_bytes())
+        logging.info("Sent NETAT scan request.")
 
     def netlog_discover(self):
         self.cookie = self.random_bytes(6)
@@ -92,10 +98,12 @@ class NetatMgr:
         timestamp = int(time.time())
         netlog_pkt = WnbModuleNetlog(b'\xff\xff\xff\xff\xff\xff', self.cookie, ip, timestamp, NETLOG_PORT)
         self.sock_send(netlog_pkt.to_bytes())
+        logging.info("Sent NETLOG discovery request.")
 
     def netat_send(self, atcmd):
         cmd = WnbNetatCmd(WNB_NETAT_CMD_AT_REQ, self.dest, self.cookie, atcmd.encode())
         self.sock_send(cmd.to_bytes())
+        logging.info(f"Sent NETAT command: {atcmd}")
 
     def netat_recv(self, timeout_ms, expecting_response=False):
         response = b""
@@ -110,18 +118,20 @@ class NetatMgr:
                 if cmd.dest == self.cookie:
                     if cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
                         devices.append(cmd.src)
+                        logging.info(f"Discovered device: {':'.join(f'{b:02x}' for b in cmd.src)}")
                     elif cmd.cmd == WNB_NETAT_CMD_AT_RESP:
                         response += cmd.data
                     if not expecting_response:
                         break
             except Exception as e:
-                print(f"Error parsing data: {e}")
+                logging.error(f"Error parsing data: {e}")
 
         if expecting_response:
             if response:
+                logging.info(f"Received response: {response.decode()}")
                 return response.decode()
             else:
-                print("No response from device or command not recognized.")
+                logging.warning("No response from device or command not recognized.")
         else:
             return devices
 
@@ -134,8 +144,9 @@ class NetatMgr:
             try:
                 netlog = WnbModuleNetlog.from_bytes(data)
                 devices.append(netlog.addr)
+                logging.info(f"Discovered device via NETLOG: {':'.join(f'{b:02x}' for b in netlog.addr)}")
             except Exception as e:
-                print(f"Error parsing netlog response: {e}")
+                logging.error(f"Error parsing netlog response: {e}")
 
         return devices
 
@@ -145,7 +156,8 @@ def select_device(devices):
     elif len(devices) > 1:
         print("Select a device to send commands to:")
         for idx, device in enumerate(devices):
-            print(f"{idx + 1}. {':'.join(f'{b:02x}' for b in device)}")
+            device_mac = ':'.join(f'{b:02x}' for b in device)
+            print(f"{idx + 1}. {device_mac}")
         choice = int(input("Enter the device number: ")) - 1
         return devices[choice]
     else:
@@ -170,6 +182,7 @@ def load_config_from_file(file_path):
                     config_commands.append((cmd, value))
     except FileNotFoundError:
         print(f"Error: Config file {file_path} not found.")
+        logging.error(f"Config file {file_path} not found.")
         sys.exit(1)
     return config_commands
 
@@ -181,6 +194,7 @@ def netlog(ifname):
     if devices:
         selected_device = select_device(devices)
         mgr.dest = selected_device
+        logging.info(f"Selected device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
         print(f"Selected device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
 
         # Send 02 command
@@ -193,7 +207,15 @@ def netlog(ifname):
     else:
         print("No devices found.")
 
-def main(ifname, command=None, dest_mac=None, config_file=None):
+def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
+    # Setup logging
+    logging.basicConfig(
+        filename=log_file if log_file else "netat_mgr.log",
+        level=logging.DEBUG,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    logging.info("Starting NetatMgr")
+
     mgr = NetatMgr(ifname)
 
     if command == "netlog":
@@ -206,13 +228,17 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
         devices = mgr.netat_recv(2000)
         if devices:
             for device in devices:
-                print(':'.join(f'{b:02x}' for b in device))
+                device_mac = ':'.join(f'{b:02x}' for b in device)
+                print(device_mac)
+                logging.info(f"Found device: {device_mac}")
         else:
             print("No devices found.")
+            logging.info("No devices found during scan.")
         return
 
     if dest_mac:
         mgr.dest = parse_mac_address(dest_mac)
+        logging.info(f"Destination MAC address set to: {':'.join(f'{b:02x}' for b in mgr.dest)}")
     else:
         while True:
             mgr.netat_scan()
@@ -221,9 +247,11 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
 
             if devices:
                 mgr.dest = select_device(devices)
+                logging.info(f"Selected device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
                 break
             else:
                 print("No devices found. Retrying...")
+                logging.info("No devices found during scan. Retrying...")
                 time.sleep(1)
 
     if config_file:
@@ -235,8 +263,10 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
             response = mgr.netat_recv(1000, expecting_response=True)
             if response:
                 print(response)
+                logging.info(f"Received response: {response}")
             else:
                 print(f"Command {full_command} failed or no response received.")
+                logging.warning(f"No response for command: {full_command}")
         return
 
     if command:
@@ -244,13 +274,16 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
         response = mgr.netat_recv(1000, expecting_response=True)
         if response:
             print(response)
+            logging.info(f"Received response: {response}")
         else:
             print("Invalid device")
+            logging.warning("No response or invalid device.")
     else:
         while True:
             try:
                 input_cmd = input("\n>: ").strip().lower()
                 if input_cmd == "exit":
+                    logging.info("Exiting on user command.")
                     break
                 elif input_cmd == "scan":
                     mgr.netat_scan()
@@ -258,23 +291,33 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
                     devices = mgr.netat_recv(1000)
                     if devices:
                         for device in devices:
-                            print(':'.join(f'{b:02x}' for b in device))
+                            device_mac = ':'.join(f'{b:02x}' for b in device)
+                            print(device_mac)
+                            logging.info(f"Found device: {device_mac}")
                         mgr.dest = select_device(devices)
+                        logging.info(f"Selected device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
                     else:
                         print("No devices found.")
+                        logging.info("No devices found during scan.")
                 elif input_cmd == "device":
-                    print(f"Current destination MAC address: {':'.join(f'{b:02x}' for b in mgr.dest)}")
+                    device_mac = ':'.join(f'{b:02x}' for b in mgr.dest)
+                    print(f"Current destination MAC address: {device_mac}")
+                    logging.info(f"Current destination MAC address: {device_mac}")
                 elif input_cmd.startswith("at"):
                     mgr.netat_send(input_cmd)
                     response = mgr.netat_recv(1000, expecting_response=True)
                     if response:
                         print(response)
+                        logging.info(f"Received response: {response}")
                     else:
                         print("Invalid device")
+                        logging.warning("No response or invalid device.")
                 elif input_cmd.startswith("setmac"):
                     _, mac_str = input_cmd.split()
                     mgr.dest = parse_mac_address(mac_str)
-                    print(f"Destination MAC address set to {':'.join(f'{b:02x}' for b in mgr.dest)}")
+                    device_mac = ':'.join(f'{b:02x}' for b in mgr.dest)
+                    print(f"Destination MAC address set to {device_mac}")
+                    logging.info(f"Destination MAC address set to {device_mac}")
                 elif input_cmd.startswith("loadconfig"):
                     _, file_path = input_cmd.split()
                     config_commands = load_config_from_file(file_path)
@@ -285,17 +328,28 @@ def main(ifname, command=None, dest_mac=None, config_file=None):
                         response = mgr.netat_recv(1000, expecting_response=True)
                         if response:
                             print(response)
+                            logging.info(f"Received response: {response}")
                         else:
                             print(f"Command {full_command} failed or no response received.")
+                            logging.warning(f"No response for command: {full_command}")
             except KeyboardInterrupt:
+                logging.info("Exiting on KeyboardInterrupt.")
                 break
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: {} <interface> [command] [dest_mac] [config_file]".format(sys.argv[0]))
-    else:
-        ifname = sys.argv[1]
-        command = sys.argv[2] if len(sys.argv) > 2 else None
-        dest_mac = sys.argv[3] if len(sys.argv) > 3 else None
-        config_file = sys.argv[4] if len(sys.argv) > 4 else None
-        main(ifname, command, dest_mac, config_file)
+    parser = argparse.ArgumentParser(description="Taixin Netat tool")
+    parser.add_argument("interface", help="Network interface to use")
+    parser.add_argument("--command", help="Command to send")
+    parser.add_argument("--dest_mac", help="Destination MAC address")
+    parser.add_argument("--config_file", help="Configuration file with commands")
+    parser.add_argument("--logfile", help="Log file destination", default="netat_mgr.log")
+
+    args = parser.parse_args()
+
+    main(
+        ifname=args.interface,
+        command=args.command,
+        dest_mac=args.dest_mac,
+        config_file=args.config_file,
+        log_file=args.logfile
+    )
