@@ -1,27 +1,135 @@
-# taixin tools
-a web gui and other tools for taixin based halow devices
 
-Theres a python implementation of libnetat which I keep in sync with
-my updated c version of libnetat with lots of quality of life fixes. 
+# Taixin tools Documentation
 
-they both support the same things.
+## Overview
+The `libnetat.py` script provides tools to manage network devices using the NETAT protocol. It supports device discovery, command execution, and configuration management with logging capabilities.
 
-features: both interactive and non interactive modes so you can script againt them.
-exit command in interactive mode.
-scan command in both modes.
-setmac command in interactive mode.
+---
 
-libnetat/.py interfacename for interactive mode
-libnetat/.py interfacename scan - returns mac addresses of devices
-libnetat/.py interfacename at+command 00:00:00:00:06:33 - send command to dst mac on the interface specified. 
+## Usage
 
+```bash
+python libnetat.py <interface> [OPTIONS]
+```
 
-added a loadconfig function to the python impementation(testing the c version now) so you can create a file
-with the command and setting, ie ssid=blah and it will run everything you have in a file. Makes things super easy. 
-remove the at+ as the code sends that .
-to switch devices in interactive mode, run scan or setmac. it will default to the first device it detects. you can run showmac to verify your connected to the right device 
+---
 
-theres a python implementation of hgpriv as well but currently it can only set things
+## Command-Line Options
+
+| Option           | Description                                                                                      | Example                                   |
+|-------------------|--------------------------------------------------------------------------------------------------|-------------------------------------------|
+| `<interface>`     | **Required**. The network interface to use.                                                     | `eth0`                                    |
+| `--command`       | Specify a command to send to devices.                                                           | `--command "AT+SSID"`                      |
+| `--dest_mac`      | Specify the destination MAC address for sending commands.                                       | `--dest_mac AA:BB:CC:DD:EE:FF`            |
+| `--config_file`   | Load commands from a configuration file and send them to the destination device.                | `--config_file config.txt`                |
+| `--logfile`       | Set the destination log file for output (default: `netat_mgr.log`).                             | `--logfile custom_log.log`                |
+
+---
+
+## Commands
+
+### Non-Interactive Commands
+These commands are executed directly using the `--command` option.
+
+| Command    | Description                                                                                  | Example                     |
+|------------|----------------------------------------------------------------------------------------------|-----------------------------|
+| `netlog`   | Perform a NETLOG discovery(Not working yet) network.                                   | `python libnetat.py eth0 --command netlog` |
+| `scan`     | Scan for available devices and display their MAC addresses.                                  | `python libnetat.py eth0 --command scan`  |
+| `AT+<CMD>` | Send an AT command to the selected device. Replace `<CMD>` with the specific AT command.     | `python libnetat.py eth0 --command "AT+SSID"` |
+
+---
+
+### Interactive Mode Commands
+Interactive mode starts when the script is run without specifying a `--command`. Users can input commands interactively.
+
+| Command       | Description                                                                                     | Example                          |
+|---------------|-------------------------------------------------------------------------------------------------|----------------------------------|
+| `exit`        | Exit the interactive session.                                                                   | `exit`                           |
+| `scan`        | Scan for available devices and display their MAC addresses.                                     | `scan`                           |
+| `device`      | Display the currently selected destination MAC address.                                         | `device`                         |
+| `at+cmd`    | Send an AT command to the currently selected device. Replace `<cmd>` with the AT command.       | `AT+SSID`                        |
+| `setmac <mac>`| Set the destination MAC address for commands. Replace `<mac>` with the MAC address.             | `setmac AA:BB:CC:DD:EE:FF`       |
+| `loadconfig <file>` | Load commands from a configuration file and execute them on the destination device.       | `loadconfig config.txt`          |
+
+---
+
+## Examples
+
+### Scan for Devices
+```bash
+python libnetat.py eth0 --command scan
+```
+
+### Send a Command to a Specific MAC Address
+```bash
+python libnetat.py eth0 --command "AT+SSID" --dest_mac AA:BB:CC:DD:EE:FF
+```
+
+### Perform NETLOG Discovery(not working)
+```bash
+python libnetat.py eth0 --command netlog
+```
+
+### Run in Interactive Mode
+```bash
+python libnetat.py eth0
+```
+
+#### Interactive Commands Example:
+```plaintext
+>: scan
+Found devices:
+1. AA:BB:CC:DD:EE:FF
+2. 11:22:33:44:55:66
+
+>: setmac AA:BB:CC:DD:EE:FF
+Destination MAC address set to AA:BB:CC:DD:EE:FF
+
+>: AT+SSID
++SSID:tacosinsideofme
+OK
+
+>: exit
+```
+
+---
+
+## Configuration File Format
+
+Configuration files should contain commands in the format `CMD=VALUE` (e.g., for AT commands).
+
+**Example `config.txt`:**
+```plaintext
+ssid=tacos
+mcs=255
+```
+
+Run with:
+```bash
+python libnetat.py eth0 --config_file config.txt
+```
+
+---
+
+## Logging
+
+The script logs activity, errors, and debug information. By default, logs are saved to `netat_mgr.log`. Use the `--logfile` option to specify a different file.
+
+**Log File Example:**
+```plaintext
+2024-12-03 10:00:00 - INFO - Starting NetatMgr
+2024-12-03 10:00:01 - DEBUG - Sent data to ('<broadcast>', 56789): b'...'
+2024-12-03 10:00:02 - INFO - Discovered device: AA:BB:CC:DD:EE:FF
+```
+
+---
+
+## Notes
+
+- Ensure the specified network interface (`<interface>`) is active and properly configured.
+- Commands requiring a MAC address (`--dest_mac`) will fail if the MAC is not valid or reachable.
+- For help or troubleshooting, check the log file specified with `--logfile`.
+
 
 server.py is a python web based wrapper for hgpriv with basic support for libnetat.
 
