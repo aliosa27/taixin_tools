@@ -5,6 +5,7 @@ import random
 import time
 import sys
 import argparse  # Added for command-line argument parsing
+import readline  # Added for command auto-completion
 
 # Constants
 NETAT_BUFF_SIZE = 4096  # Increase buffer size to handle longer commands
@@ -150,6 +151,50 @@ class NetatMgr:
 
         return devices
 
+def complete_commands(text, state):
+    """
+    Tab completion function for interactive mode commands.
+    """
+    # Basic commands that don't need arguments
+    base_commands = ["exit", "scan", "device", "help"]
+    
+    # Commands that take arguments
+    arg_commands = ["setmac", "loadconfig"]
+    
+    # AT commands for device configuration
+    at_commands = ["at+", "at+cpsver", "at+cfver", "at+wprt", "at+ssid", "at+encry", "at+bssid", 
+                  "at+key", "at+cmd", "at+net", "at+dhcpc", "at+dhcpd", "at+dns", "at+remote"]
+    
+    # Combine all commands for the completion
+    all_commands = base_commands + arg_commands + at_commands
+    
+    # Get the full input line and cursor position to provide context aware completion
+    line = readline.get_line_buffer()
+    
+    # If we're completing at the start of the line, match against all commands
+    if not line or line.startswith(text):
+        matches = [cmd for cmd in all_commands if cmd.startswith(text.lower())]
+    else:
+        # For more advanced context completion, we could add more specific completions here
+        # For example, if the command is "loadconfig", we could complete with config file names
+        matches = []
+    
+    if state < len(matches):
+        return matches[state]
+    else:
+        return None
+
+def setup_autocomplete():
+    # Enable tab completion on most systems
+    if 'libedit' in readline.__doc__:
+        # macOS uses libedit readline
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        # Regular readline on Linux/Windows
+        readline.parse_and_bind("tab: complete")
+    readline.set_completer(complete_commands)
+    readline.set_completer_delims(' \t\n')
+
 def select_device(devices):
     if len(devices) == 1:
         return devices[0]
@@ -206,6 +251,18 @@ def netlog(ifname):
             print("Invalid device")
     else:
         print("No devices found.")
+
+def print_help():
+    """Print available commands in interactive mode"""
+    print("\nAvailable commands:")
+    print("  exit                - Exit the program")
+    print("  scan                - Scan for devices")
+    print("  device              - Show current device MAC")
+    print("  setmac <mac>        - Set destination MAC address")
+    print("  loadconfig <file>   - Load and apply configuration from file")
+    print("  at+<command>[=val]  - Send AT command to device")
+    print("  help                - Show this help message")
+    print("\nPress Tab for command auto-completion\n")
 
 def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
     # Setup logging
@@ -279,13 +336,20 @@ def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
             print("Invalid device")
             logging.warning("No response or invalid device.")
     else:
+        # Enable command auto-completion
+        setup_autocomplete()
+        
+        # Print welcome message and available commands
+        print("\nTaixin Netat Tool - Interactive Mode")
+        print("Type 'help' for available commands or press Tab for auto-completion")
+        
         while True:
             try:
-                input_cmd = input("\n>: ").strip().lower()
-                if input_cmd == "exit":
+                input_cmd = input("\n>: ").strip()
+                if input_cmd.lower() == "exit":
                     logging.info("Exiting on user command.")
                     break
-                elif input_cmd == "scan":
+                elif input_cmd.lower() == "scan":
                     mgr.netat_scan()
                     time.sleep(1)
                     devices = mgr.netat_recv(1000)
@@ -299,11 +363,11 @@ def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
                     else:
                         print("No devices found.")
                         logging.info("No devices found during scan.")
-                elif input_cmd == "device":
+                elif input_cmd.lower() == "device":
                     device_mac = ':'.join(f'{b:02x}' for b in mgr.dest)
                     print(f"Current destination MAC address: {device_mac}")
                     logging.info(f"Current destination MAC address: {device_mac}")
-                elif input_cmd.startswith("at"):
+                elif input_cmd.lower().startswith("at"):
                     mgr.netat_send(input_cmd)
                     response = mgr.netat_recv(1000, expecting_response=True)
                     if response:
@@ -312,13 +376,13 @@ def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
                     else:
                         print("Invalid device")
                         logging.warning("No response or invalid device.")
-                elif input_cmd.startswith("setmac"):
+                elif input_cmd.lower().startswith("setmac"):
                     _, mac_str = input_cmd.split()
                     mgr.dest = parse_mac_address(mac_str)
                     device_mac = ':'.join(f'{b:02x}' for b in mgr.dest)
                     print(f"Destination MAC address set to {device_mac}")
                     logging.info(f"Destination MAC address set to {device_mac}")
-                elif input_cmd.startswith("loadconfig"):
+                elif input_cmd.lower().startswith("loadconfig"):
                     _, file_path = input_cmd.split()
                     config_commands = load_config_from_file(file_path)
                     for cmd, value in config_commands:
@@ -332,6 +396,12 @@ def main(ifname, command=None, dest_mac=None, config_file=None, log_file=None):
                         else:
                             print(f"Command {full_command} failed or no response received.")
                             logging.warning(f"No response for command: {full_command}")
+                elif input_cmd.lower() == "help":
+                    print_help()
+                else:
+                    if input_cmd.strip() and not input_cmd.lower().startswith("at"):
+                        print(f"Unknown command: {input_cmd}")
+                        print("Type 'help' for available commands")
             except KeyboardInterrupt:
                 logging.info("Exiting on KeyboardInterrupt.")
                 break
