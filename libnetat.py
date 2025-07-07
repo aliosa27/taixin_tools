@@ -941,18 +941,17 @@ class CursesInterface:
         
         if scan_error[0]:
             self.stop_wait_feedback()
-            self.add_output_line(f"✗ Scan failed: {scan_error[0]}", 3)
+            self.add_output_line(f" Scan failed: {scan_error[0]}", 3)
             return
         
         if not scan_sent[0]:
             self.stop_wait_feedback()
-            self.add_output_line("✗ Scan send timeout", 3)
+            self.add_output_line(" Scan send timeout", 3)
             return
         
         self.start_device_collection(scan_devices)
         
     def start_device_collection(self, device_list):
-        """Start collecting scan responses in a non-blocking way"""
         def collect_devices():
             start_time = time.time()
             timeout = self.mgr.scan_timeout
@@ -1045,7 +1044,6 @@ class CursesInterface:
         self.start_response_collection(command_responses, command)
         
     def start_response_collection(self, response_list, command="unknown"):
-        """Start collecting responses in a non-blocking way"""
         import threading
         
         def collect_responses():
@@ -1591,7 +1589,6 @@ class CursesInterface:
             self.init_curses()
             self.add_output_line(f"nCurses GUI started on {platform.system()}", 1)
             self.add_output_line(f"Timeouts: Scan={self.mgr.scan_timeout}s, Response={self.mgr.response_timeout}s", 4)
-            self.add_output_line("Visual feedback enabled - watch for spinners and progress bars", 4)
             self.add_output_line("Type 'debug' to toggle debug mode, 'help' for commands", 4)
             
             last_command_time = 0
@@ -2189,7 +2186,7 @@ if __name__ == "__main__":
         print("Install with: pip install scapy")
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="Taixin Netat Tool - Working Scapy Edition")
+    parser = argparse.ArgumentParser(description="Taixin Netat Tool")
     
     available_interfaces = get_network_interfaces()
     interface_help = f"Network interface to use. Available: {', '.join(available_interfaces[:3])}"
