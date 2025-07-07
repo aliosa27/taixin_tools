@@ -256,17 +256,7 @@ Debug mode provides:
 ## Advanced Usage
 
 ### Scripting Integration
-The tool can be integrated into automated scripts:
-```bash
-#!/bin/bash
-# Automated device scanning and configuration
-
-# Scan for devices
-python3 libnetat.py eth0 --command scan > devices.txt
-
-# Configure found devices
-python3 libnetat.py eth0 --command "loadconfig production.txt"
-```
+The tool can be integrated into scripts
 
 ### Response Logging
 Enable comprehensive response logging:
