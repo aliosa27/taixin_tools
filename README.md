@@ -1,134 +1,309 @@
-
-# Taixin tools Documentation
-
+# Taixin LibNetat Tool v2.0 
 ## Overview
-The `libnetat.py` script provides tools to manage network devices using the NETAT protocol. It supports device discovery, command execution, and configuration management with logging capabilities.
 
----
+The Taixin LibNetat Tool v2.0 is a cross-platform network analysis and AT command communication tool designed for interacting with Taixin wireless devices. This version features enhanced multiplatform support which is missing from the official tool and my implementation which sucked.
+
+## Features
+
+### Core Functionality
+- **Device Discovery**: Automatic scanning and detection of devices on the network
+- **AT Command Interface**: Send and receive AT commands to/from devices
+- **Network Communication**: UDP-based packet transmission using Scapy library for cross platform compatibility(woot!)
+- **Device Management**: Configuration loading, saving, and device information retrieval
+- **Real-time Monitoring**: Live packet capture and response monitoring
+
+### Multiplatform Support (v2.0)
+- **Windows**: Full compatibility with Windows network interfaces
+- **macOS**: Native support for macOS network stack
+- **Linux**: Optimized for Linux distributions with proper interface handling
+- **Auto-detection**: Automatic platform detection and interface selection
+
+### User Interface Options
+- **Command Line Interface**: Traditional CLI for scripting and automation
+- **Enhanced UI**: Optional curses-based interactive interface (when available)
+- **Debug Mode**: Comprehensive logging and debugging capabilities
+
+### Network Features
+- **Interface Management**: Automatic or manual network interface selection
+- **Packet Capture**: Real-time packet monitoring with Scapy
+- **Timeout Management**: Configurable scan and response timeouts
+
+## Installation
+
+### Prerequisites
+```bash
+# Install Python 3.6+ and pip
+python3 --version
+pip3 --version
+
+# Install required dependencies
+pip3 install scapy
+```
+
+### Optional Dependencies
+```bash
+# For enhanced UI (Linux/macOS)
+pip3 install curses
+
+# For command history (recommended)
+pip3 install readline
+```
+
+### Platform-Specific Notes
+
+#### Linux
+```bash
+# May require elevated privileges for raw packet access
+sudo python3 libnetat.py --help
+```
+
+#### macOS
+```bash
+# Install Scapy with libpcap support
+pip3 install scapy[complete]
+```
+
+#### Windows
+```bash
+# Install WinPcap or Npcap
+# Download from: https://nmap.org/npcap/
+pip3 install scapy
+```
 
 ## Usage
 
+### Basic Syntax
 ```bash
-python libnetat.py <interface> [OPTIONS]
+python3 libnetat.py [interface] [options]
 ```
 
----
+### Command Line Arguments
 
-## Command-Line Options
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `interface` | Network interface to use ('auto' for automatic) | auto |
+| `--command` | AT command to send or special command | None |
+| `--dest_mac` | Target device MAC address | None |
+| `--debug` | Enable debug output | False |
+| `--scan-timeout` | Scan timeout in seconds | 8 |
+| `--response-timeout` | Response timeout in seconds | 5 |
+| `--enhanced` | Use enhanced curses UI | False |
+| `--log-responses` | Enable response logging | False |
+| `--log-file` | Log file path | responses.log |
+| `--list-interfaces` | List available network interfaces | False |
+| `--test-packet` | Send test packet | False |
 
-| Option           | Description                                                                                      | Example                                   |
-|-------------------|--------------------------------------------------------------------------------------------------|-------------------------------------------|
-| `<interface>`     | **Required**. The network interface to use.                                                     | `eth0`                                    |
-| `--command`       | Specify a command to send to devices.                                                           | `--command "AT+SSID"`                      |
-| `--dest_mac`      | Specify the destination MAC address for sending commands.                                       | `--dest_mac AA:BB:CC:DD:EE:FF`            |
-| `--config_file`   | Load commands from a configuration file and send them to the destination device.                | `--config_file config.txt`                |
-| `--logfile`       | Set the destination log file for output (default: `netat_mgr.log`).                             | `--logfile custom_log.log`                |
+### Common Usage Examples
 
----
-
-## Commands
-
-### Non-Interactive Commands
-These commands are executed directly using the `--command` option.
-
-| Command    | Description                                                                                  | Example                     |
-|------------|----------------------------------------------------------------------------------------------|-----------------------------|
-| `netlog`   | Perform a NETLOG discovery(Not working yet) network.                                   | `python libnetat.py eth0 --command netlog` |
-| `scan`     | Scan for available devices and display their MAC addresses.                                  | `python libnetat.py eth0 --command scan`  |
-| `AT+<CMD>` | Send an AT command to the selected device. Replace `<CMD>` with the specific AT command.     | `python libnetat.py eth0 --command "AT+SSID"` |
-
----
-
-### Interactive Mode Commands
-Interactive mode starts when the script is run without specifying a `--command`. Users can input commands interactively.
-
-| Command       | Description                                                                                     | Example                          |
-|---------------|-------------------------------------------------------------------------------------------------|----------------------------------|
-| `exit`        | Exit the interactive session.                                                                   | `exit`                           |
-| `scan`        | Scan for available devices and display their MAC addresses.                                     | `scan`                           |
-| `device`      | Display the currently selected destination MAC address.                                         | `device`                         |
-| `at+cmd`    | Send an AT command to the currently selected device. Replace `<cmd>` with the AT command.       | `AT+SSID`                        |
-| `setmac <mac>`| Set the destination MAC address for commands. Replace `<mac>` with the MAC address.             | `setmac AA:BB:CC:DD:EE:FF`       |
-| `loadconfig <file>` | Load commands from a configuration file and execute them on the destination device.       | `loadconfig config.txt`          |
-
----
-
-## Examples
-
-### Scan for Devices
+#### 1. List Available Network Interfaces
 ```bash
-python libnetat.py eth0 --command scan
+python3 libnetat.py --list-interfaces
+```
+Output:
+```
+Available network interfaces (Scapy detected):
+  1. eth0         - IP: 192.168.1.100, MAC: 00:11:22:33:44:55
+  2. wlan0        - IP: 192.168.1.101, MAC: 00:11:22:33:44:66
+  3. lo           - IP: 127.0.0.1, MAC: Unknown MAC
+
 ```
 
-### Send a Command to a Specific MAC Address
+#### 2. Scan for Devices
 ```bash
-python libnetat.py eth0 --command "AT+SSID" --dest_mac AA:BB:CC:DD:EE:FF
+# Auto-select interface and scan
+python3 libnetat.py --command scan
+
+# Use specific interface
+python3 libnetat.py eth0 --command scan
 ```
 
-### Perform NETLOG Discovery(not working)
+#### 3. Send AT Commands
 ```bash
-python libnetat.py eth0 --command netlog
+
+# Get device information
+python3 libnetat.py eth0 --command deviceinfo
+
+# Send command to specific device
+python3 libnetat.py eth0 --dest_mac 00:11:22:33:44:55 --command "at+mode?"
 ```
 
-### Run in Interactive Mode
+#### 4. Configuration Management
 ```bash
-python libnetat.py eth0
+# Save current device configuration
+python3 libnetat.py eth0 --command "saveconfig backup.txt"
+
+# Load configuration from file
+python3 libnetat.py eth0 --command "loadconfig backup.txt"
 ```
 
-#### Interactive Commands Example:
-```plaintext
->: scan
-Found devices:
-1. AA:BB:CC:DD:EE:FF
-2. 11:22:33:44:55:66
+#### 5. Interactive Mode
+```bash
+# Launch nCurses ui
+python3 libnetat.py eth0 --enhanced
 
->: setmac AA:BB:CC:DD:EE:FF
-Destination MAC address set to AA:BB:CC:DD:EE:FF
-
->: AT+SSID
-+SSID:tacosinsideofme
-OK
-
->: exit
+# Launch with debug mode
+python3 libnetat.py eth0 --debug --enhanced
 ```
+
+#### 6. Test Network Setup
+```bash
+# Test packet transmission
+python3 libnetat.py eth0 --test-packet
+
+```
+
+## AT Commands
+
+### Production Commands (Set)
+The tool supports numerous production-level SET commands including:
+- `mode`, `ssid`, `keymgmt`, `psk` - Basic wireless configuration
+- `txpower`, `channel`, `freq_range` - RF parameters
+- `beacon_int`, `dtim_period` - AP timing parameters
+- `country_region`, `acs` - Regulatory and channel selection
+- `pair`, `unpair`, `pairing` - Device pairing functions
+- And many more...
+
+### Production Commands (Get)
+Query commands for retrieving device status:
+- `mode`, `ssid`, `rssi`, `conn_state` - Connection status
+- `sta_list`, `scan_list`, `bssid` - Network information
+- `battery_level`, `temperature` - Device health
+- `fwinfo`, `stainfo`, `signal` - System information
+
+### Debug Commands
+Advanced debugging and testing commands available in debug mode.
+
+## Configuration Files
+
+### Device Configuration Format
+When using `saveconfig` or `loadconfig`, the tool creates/reads configuration files in a structured format containing device settings and parameters.
+
+### Logging Configuration
+The tool generates detailed logs in `netat_scapy.log` for troubleshooting and analysis.
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Permission Denied
+```bash
+# Solution: Run with elevated privileges
+sudo python3 libnetat.py --command scan
+```
+
+#### 2. Scapy Import Error
+```bash
+# Solution: Install Scapy
+pip3 install scapy
+
+# For complete installation
+pip3 install scapy[complete]
+```
+
+#### 3. No Network Interfaces Found
+```bash
+# Check available interfaces
+python3 libnetat.py --list-interfaces
+
+# Try with auto-detection
+python3 libnetat.py auto --command scan
+```
+
+#### 4. No Devices Found
+- Ensure devices are powered on and are on the same network segment
+- Check network connectivity
+- Verify correct network interface selection
+- Try increasing scan timeout: `--scan-timeout 15`
+
+#### 5. Packet Capture Issues
+```bash
+# Test packet transmission
+python3 libnetat.py eth0 --test-packet
+
+# Monitor with external tools
+sudo tcpdump -i eth0 udp port 56789
+```
+
+### Debug Mode
+Enable debug mode for detailed troubleshooting:
+```bash
+python3 libnetat.py eth0 --debug --command scan
+```
+
+Debug mode provides:
+- Detailed packet information
+- Network interface details
+- Command execution traces
+- Error stack traces
+
+## Platform-Specific Features
+
+### Windows
+- Automatic WinPcap/Npcap detection
+- Windows-specific network interface handling
+- UAC prompt handling for elevated privileges
+
+### macOS
+- Native macOS network stack integration
+- Automatic interface selection optimization which is broken so specify an interface
+- macOS-specific packet capture handling
+
+### Linux
+- Optimized for various Linux distributions
+- Enhanced interface detection
+- Proper raw socket handling
+
+## Advanced Usage
+
+### Scripting Integration
+The tool can be integrated into automated scripts:
+```bash
+#!/bin/bash
+# Automated device scanning and configuration
+
+# Scan for devices
+python3 libnetat.py eth0 --command scan > devices.txt
+
+# Configure found devices
+python3 libnetat.py eth0 --command "loadconfig production.txt"
+```
+
+### Response Logging
+Enable comprehensive response logging:
+```bash
+python3 libnetat.py eth0 --log-responses --log-file device_responses.log --command deviceinfo
+```
+
+## Security Considerations
+
+- The tool requires raw packet access which may need elevated privileges
+- Network communication is unencrypted - use on trusted networks only
+- Configuration files may contain sensitive information - protect accordingly
+- Debug logs may contain network traffic details - review before sharing
+
+## Version History
+
+### v2.0 Features
+- Enhanced multiplatform support (Windows, macOS, Linux)
+- Improved network interface detection and handling
+- Optimized packet capture and transmission
+- Better error handling and user feedback
+- Enhanced debugging capabilities
+- Improved configuration management
+
+## Support and Updates
+
+- **Repository**: https://github.com/aliosa27/taixin_tools
+- **Contact**: aliosa27@aliosa27.me
+- **Issues**: Report bugs and feature requests on GitHub
+
+## License
+
+This tool is provided as-is for device management purposes. Use responsibly kids.
 
 ---
 
-## Configuration File Format
-
-Configuration files should contain commands in the format `CMD=VALUE` (e.g., for AT commands).
-
-**Example `config.txt`:**
-```plaintext
-ssid=tacos
-mcs=255
-```
-
-Run with:
-```bash
-python libnetat.py eth0 --config_file config.txt
-```
-
----
-
-## Logging
-
-The script logs activity, errors, and debug information. By default, logs are saved to `netat_mgr.log`. Use the `--logfile` option to specify a different file.
-
-**Log File Example:**
-```plaintext
-2024-12-03 10:00:00 - INFO - Starting NetatMgr
-2024-12-03 10:00:01 - DEBUG - Sent data to ('<broadcast>', 56789): b'...'
-2024-12-03 10:00:02 - INFO - Discovered device: AA:BB:CC:DD:EE:FF
-```
-
----
-
-## Notes
-
-- Ensure the specified network interface (`<interface>`) is active and properly configured.
-- Commands requiring a MAC address (`--dest_mac`) will fail if the MAC is not valid or reachable.
-- For help or troubleshooting, check the log file specified with `--logfile`.
+*Taixin LibNetat Tool v2.0 - Cross-Platform Network Analysis Tool*
 
 
 server.py is a python web based wrapper for hgpriv with basic support for libnetat.
