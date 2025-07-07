@@ -225,7 +225,6 @@ class ScapyNetAtMgr:
         self.response_logger.propagate = False
         
     def generate_log_filename(self):
-        """Generate automatic log filename with device ID and date"""
         from datetime import datetime
         
         if self.dest == b'\xff\xff\xff\xff\xff\xff':
@@ -1033,12 +1032,12 @@ class CursesInterface:
         
         if command_error[0]:
             self.stop_wait_feedback()
-            self.add_output_line(f"✗ Command failed: {command_error[0]}", 3)
+            self.add_output_line(f" Command failed: {command_error[0]}", 3)
             return
         
         if not command_sent[0]:
             self.stop_wait_feedback()
-            self.add_output_line("✗ Command send timeout", 3)
+            self.add_output_line(" Command send timeout", 3)
             return
         
         self.start_response_collection(command_responses, command)
