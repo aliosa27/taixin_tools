@@ -12,6 +12,15 @@ import os
 import threading
 from datetime import datetime
 
+# Version information
+__version__ = "2.0.2"  
+
+# Try to import autoupdate module
+try:
+    import autoupdate
+except ImportError:
+    autoupdate = None
+
 try:
     from scapy.all import *
     from scapy.layers.inet import IP, UDP
@@ -26,9 +35,7 @@ try:
     warnings.filterwarnings("ignore", message=".*iface.*has no effect.*")
 except ImportError:
     HAS_SCAPY = False
-    print("ERROR: Scapy not found. Please install it:")
-    print("pip install scapy")
-    sys.exit(1)
+    # We'll check args later to see if we can continue without scapy
 
 try:
     import readline
@@ -102,6 +109,9 @@ SET_COMMANDS = PRODUCTION_SET_COMMANDS + DEBUG_SET_COMMANDS
 GET_COMMANDS = PRODUCTION_GET_COMMANDS + DEBUG_GET_COMMANDS
 
 def get_network_interfaces():
+    if not HAS_SCAPY:
+        return ['auto']
+    
     try:
         interfaces = get_if_list()
         active_interfaces = []
@@ -362,7 +372,10 @@ class ScapyNetAtMgr:
             raise e
 
     def netat_scan(self, retries=3, retry_delay=0.5):
+        # Generate a new random cookie for this scan
         self.cookie = self.random_bytes(6)
+        
+        # Create the scan command with broadcast destination
         scan_cmd = WnbNetatCmd(WNB_NETAT_CMD_SCAN_REQ, b'\xff\xff\xff\xff\xff\xff', self.cookie)
         packet_data = scan_cmd.to_bytes()
         
@@ -370,12 +383,23 @@ class ScapyNetAtMgr:
             print(f"Sending NETAT scan request (broadcast - timeout: {self.scan_timeout}s)")
             print(f"  Cookie: {':'.join(f'{b:02x}' for b in self.cookie)}")
         
+        # Send multiple scan requests with delay between them
+        success_count = 0
         for i in range(retries):
-            self.send_packet(packet_data, unicast=False)  
-            if i < retries - 1:
-                time.sleep(retry_delay)
+            try:
+                self.send_packet(packet_data, unicast=False)
+                success_count += 1
+                
+                # Add delay between retries
+                if i < retries - 1:
+                    time.sleep(retry_delay)
+            except Exception as e:
+                logging.error(f"Error sending scan packet {i+1}/{retries}: {e}")
+                if self.debug:
+                    print(f"Error sending scan packet {i+1}/{retries}: {e}")
         
-        logging.info(f"Sent NETAT scan request with {retries} retries")
+        logging.info(f"Sent NETAT scan request: {success_count}/{retries} packets sent successfully")
+        return success_count > 0  # Return True if at least one packet was sent successfully
 
     def netat_send(self, atcmd, retries=2, retry_delay=0.2):
         self.captured_packets.clear()
@@ -513,6 +537,7 @@ class CursesInterface:
             raise ImportError("Curses not available on this platform")
             
         self.mgr = mgr
+        self.discovered_devices = []  # List to track discovered devices
         self.stdscr = None
         self.history = []
         self.history_pos = 0
@@ -538,6 +563,12 @@ class CursesInterface:
         self.signal_graph_interval = 5.0
         self.signal_history = []
         self.max_signal_history = 50
+        
+        # Status bar variables
+        self.status_text = ""
+        self.status_color = 4  # Default to cyan
+        self.status_timeout = 0
+        self.status_set_time = 0
         
         self.setup_output_capture()
         
@@ -586,6 +617,8 @@ class CursesInterface:
         self.wait_timeout = timeout
         self.wait_spinner_pos = 0
         self.last_spinner_update = time.time()
+        # Also update status bar with operation information
+        self.set_status(f"Processing: {operation}", 6, timeout * 2)
         
     def stop_wait_feedback(self):
         self.waiting_for_response = False
@@ -628,6 +661,25 @@ class CursesInterface:
         if current_time - self.last_spinner_update > 0.08:
             self.wait_spinner_pos = (self.wait_spinner_pos + 1) % len(self.wait_spinner)
             self.last_spinner_update = current_time
+            
+    def set_status(self, text, color=4, timeout=3):
+        self.status_text = text
+        self.status_color = color  # Default cyan
+        self.status_timeout = timeout
+        self.status_set_time = time.time()
+    
+    def get_status_text(self):
+        if not self.status_text:
+            return ""
+            
+        if self.status_timeout > 0:
+            elapsed = time.time() - self.status_set_time
+            if elapsed > self.status_timeout:
+                # Clear status after timeout
+                self.status_text = ""
+                return ""
+                
+        return self.status_text
             
     def get_wait_status_line(self):
         if not self.waiting_for_response:
@@ -695,10 +747,35 @@ class CursesInterface:
             
     def add_output_line(self, text, color_pair=5):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        clean_text = str(text).replace('\x00', '').replace('\r', '').replace('\n', ' ')
-        clean_text = ''.join(char for char in clean_text if ord(char) >= 32 or char in ['\t'])
-        self.output_lines.append((f"[{timestamp}] {clean_text}", color_pair))
-        if len(self.output_lines) > self.max_output_lines:
+        
+        # Ensure text is a string and handle None
+        if text is None:
+            text = "(None)"
+        else:
+            text = str(text)
+        
+        # Remove problematic characters
+        clean_text = text.replace('\x00', '').replace('\r', '')
+        
+        # Handle newlines - split into multiple lines instead of replacing with space
+        if '\n' in clean_text:
+            lines = clean_text.split('\n')
+            # Process the first line normally
+            first_line = ''.join(char for char in lines[0] if ord(char) >= 32 or char in ['\t'])
+            self.output_lines.append((f"[{timestamp}] {first_line}", color_pair))
+            
+            # Process remaining lines with proper indentation
+            for line in lines[1:]:  
+                if line.strip():  # Only add non-empty lines
+                    indent_line = ''.join(char for char in line if ord(char) >= 32 or char in ['\t'])
+                    self.output_lines.append((f"         {indent_line}", color_pair))
+        else:
+            # Single line - just clean it
+            clean_text = ''.join(char for char in clean_text if ord(char) >= 32 or char in ['\t'])
+            self.output_lines.append((f"[{timestamp}] {clean_text}", color_pair))
+        
+        # Trim to max length if needed
+        while len(self.output_lines) > self.max_output_lines:
             self.output_lines.pop(0)
             
     def get_completions(self, text):
@@ -714,6 +791,15 @@ class CursesInterface:
         
         all_commands = base_commands + arg_commands + at_commands
         
+        # Special case for setmac with discovered devices
+        if text.lower() == "setmac" and self.discovered_devices:
+            # Add setmac with device MAC options
+            device_options = []
+            for device in self.discovered_devices:
+                device_mac = ':'.join(f'{b:02x}' for b in device)
+                device_options.append(f"setmac {device_mac}")
+            return ["setmac"] + device_options
+        
         matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
         return matches
         
@@ -725,11 +811,37 @@ class CursesInterface:
         if not words:
             return
             
+        # Special case for setmac with a space after it
+        if len(words) == 1 and words[0].lower() == "setmac" and self.current_command.endswith(" "):
+            # User typed "setmac " - show device options if available
+            if self.discovered_devices:
+                # Show device options
+                device_options = []
+                for device in self.discovered_devices:
+                    device_mac = ':'.join(f'{b:02x}' for b in device)
+                    device_options.append(device_mac)
+                
+                if len(device_options) == 1:
+                    # Only one device, auto-complete it
+                    self.current_command = f"setmac {device_options[0]}"
+                    self.cursor_pos = len(self.current_command)
+                else:
+                    # Multiple devices, show options
+                    self.add_output_line(f"Devices: {', '.join(device_options)}", 4)
+                return
+        
         current_word = words[-1] if words else ""
         completions = self.get_completions(current_word)
         
         if len(completions) == 1:
             completion = completions[0]
+            
+            # Special handling for full setmac completions (with device MAC)
+            if completion.startswith("setmac "):
+                self.current_command = completion
+                self.cursor_pos = len(self.current_command)
+                return
+                
             if words:
                 new_cmd = " ".join(words[:-1]) + " " + completion if len(words) > 1 else completion
             else:
@@ -750,12 +862,61 @@ class CursesInterface:
         title = f"Taixin LibNetat Tool - nCurses GUI ({platform.system()}){debug_indicator}"
         self.stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(1) | curses.A_BOLD)
         
+        # Second line with device info and status in a compact format
         device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
-        device_info = f"Device: {device_mac} | Interface: {self.mgr.ifname} | Timeouts: {self.mgr.scan_timeout}s/{self.mgr.response_timeout}s"
+        
+        # Get status text if available
+        status_text = self.get_status_text()
+        
+        # Create a more adaptive device info string based on available space
+        if status_text:
+            # If we have status text, we need to be more concise with device info
+            status_display_length = len(status_text) + 9  # "Status: " + text
+            available_width = width - status_display_length - 5  # 5 for padding and separator
+            
+            if available_width < 40:
+                # Very limited space - show minimal device info
+                device_info = f"MAC: {device_mac}"
+            elif available_width < 60:
+                # Limited space - show device and interface
+                device_info = f"Device: {device_mac} | IF: {self.mgr.ifname}"
+            else:
+                # Enough space - show full info
+                device_info = f"Device: {device_mac} | Interface: {self.mgr.ifname} | Timeouts: {self.mgr.scan_timeout}s/{self.mgr.response_timeout}s"
+        else:
+            # No status, we can use the full width for device info
+            device_info = f"Device: {device_mac} | Interface: {self.mgr.ifname} | Timeouts: {self.mgr.scan_timeout}s/{self.mgr.response_timeout}s"
+        
+        # Ensure device_info fits within available space
         if len(device_info) > width - 4:
             device_info = device_info[:width-7] + "..."
+            
+        # Display device info at the beginning of line 1
         self.stdscr.addstr(1, 2, device_info, curses.color_pair(4))
         
+        # If we have status text, display it
+        if status_text:
+            # Calculate where to start the status text
+            status_start = len(device_info) + 3
+            
+            # Check if there's enough room for the status
+            if status_start + 8 < width - 4:  # Ensure there's room (8 chars for "Status: ")
+                # Draw a subtle separator
+                self.stdscr.addstr(1, status_start - 1, "|", curses.color_pair(5))
+                self.stdscr.addstr(1, status_start + 1, "Status:", curses.color_pair(4))
+                
+                # Calculate maximum length for status text
+                max_status_length = width - status_start - 10  # 10 for "Status: " and some padding
+                if max_status_length > 0:
+                    if len(status_text) > max_status_length:
+                        display_status = status_text[:max_status_length-3] + "..."
+                    else:
+                        display_status = status_text
+                        
+                    # Display the status text with its color
+                    self.stdscr.addstr(1, status_start + 9, display_status, curses.color_pair(self.status_color))
+        
+        # Operation waiting status on line 2 (only shown during operations)
         line_offset = 0
         if self.waiting_for_response:
             wait_status = self.get_wait_status_line()
@@ -775,14 +936,36 @@ class CursesInterface:
         
         for i, (line, color) in enumerate(display_lines):
             if output_start + i < height - prompt_lines - 1:
-                safe_line = str(line).replace('\x00', '').replace('\r', '').replace('\n', ' ')
-                safe_line = ''.join(char for char in safe_line if ord(char) >= 32 or char in ['\t'])
-                display_line = safe_line[:width-1] if len(safe_line) >= width else safe_line
                 try:
+                    # Ensure the line is a string and contains no null bytes
+                    if line is None:
+                        safe_line = "(None)"
+                    else:
+                        safe_line = str(line).replace('\x00', '').replace('\r', '')
+                    
+                    # Filter out control characters except tab
+                    safe_line = ''.join(char for char in safe_line if ord(char) >= 32 or char in ['\t'])
+                    
+                    # Make sure we don't exceed screen width
+                    if len(safe_line) >= width:
+                        display_line = safe_line[:width-4] + "..."
+                    else:
+                        display_line = safe_line
+                    
+                    # Add the line to the screen with appropriate color
                     self.stdscr.addstr(output_start + i, 0, display_line, curses.color_pair(color))
-                except ValueError as e:
-                    fallback = f"[Display Error: {str(e)[:30]}...]"
-                    self.stdscr.addstr(output_start + i, 0, fallback, curses.color_pair(3))
+                    
+                    # Clear to the end of line to erase any previous content
+                    self.stdscr.clrtoeol()
+                except Exception as e:
+                    # Show a helpful error message if display fails
+                    error_msg = f"[Display Error: {str(e)[:30]}...]"
+                    try:
+                        self.stdscr.addstr(output_start + i, 0, error_msg, curses.color_pair(3))
+                        self.stdscr.clrtoeol()
+                    except:
+                        # Last resort if even the error display fails
+                        pass
                 
         prompt_y = height - prompt_lines - 1
         self.stdscr.addstr(prompt_y, 0, "─" * width, curses.color_pair(5))
@@ -805,7 +988,7 @@ class CursesInterface:
                 cursor_char = cmd_display[self.cursor_pos] if self.cursor_pos < len(cmd_display) else " "
                 self.stdscr.addstr(prompt_y + 1, cursor_x, cursor_char, curses.color_pair(2) | curses.A_REVERSE)
                 
-        help_text = "TAB: complete | UP/DOWN: history | CTRL+C: exit/cancel | 'debug': toggle debug mode"
+        help_text = "TAB: complete | UP/DOWN: history | F1: device select | CTRL+C: exit/cancel | 'debug': toggle debug mode"
         if self.waiting_for_response:
             help_text = "Waiting for device response... | CTRL+C: cancel"
             
@@ -916,6 +1099,7 @@ class CursesInterface:
                 
     def execute_scan_command(self):
         self.add_output_line("Starting device scan...", 4)
+        self.set_status("Initiating device scan", 4, 3)
         
         self.start_wait_feedback("Scanning for devices", self.mgr.scan_timeout)
         
@@ -927,57 +1111,151 @@ class CursesInterface:
             try:
                 self.start_output_capture()
                 self.mgr.start_packet_capture()
-                self.mgr.netat_scan()
-                scan_sent[0] = True
+                # netat_scan now returns True if at least one packet was sent successfully
+                success = self.mgr.netat_scan(retries=3, retry_delay=0.3)  # More retries with clear delay
+                scan_sent[0] = success
                 
+                if success and self.mgr.debug:
+                    self.add_output_line("Scan broadcast packets sent successfully", 1)
+                    
             except Exception as e:
                 scan_error[0] = str(e)
         
+        # Create and start the scan thread
         scan_thread = threading.Thread(target=send_scan_thread, daemon=True)
         scan_thread.start()
         
-        scan_thread.join(timeout=1.0)
+        # Wait for scan thread with UI updates during wait
+        start_wait = time.time()
+        max_wait = 3.0  # Give more time for scan to complete
         
+        # Keep UI updated while waiting for the scan thread
+        self.set_status("Broadcasting scan packets...", 4, 0)
+        while (time.time() - start_wait < max_wait) and scan_thread.is_alive():
+            # Keep UI responsive during wait
+            self.stdscr.timeout(50)
+            try:
+                key = self.stdscr.getch()
+                if key == 3:  # CTRL+C
+                    self.operation_cancelled = True
+                    break
+            except:
+                pass
+                
+            # Update UI regularly during wait
+            self.draw_screen()
+            time.sleep(0.1)
+            
+            # Check if scan has been sent yet
+            if scan_sent[0]:
+                self.set_status("Scan broadcast sent, waiting for responses", 1, 0)
+                break
+        
+        # Make sure thread is done
+        if scan_thread.is_alive():
+            scan_thread.join(timeout=1.0)
+        
+        # If we get an error, handle it and return
         if scan_error[0]:
             self.stop_wait_feedback()
-            self.add_output_line(f" Scan failed: {scan_error[0]}", 3)
+            self.add_output_line(f"Scan failed: {scan_error[0]}", 3)
+            self.set_status(f"Scan error: {scan_error[0][:30]}", 3, 5)
             return
         
+        # If the scan command wasn't sent successfully
         if not scan_sent[0]:
             self.stop_wait_feedback()
-            self.add_output_line(" Scan send timeout", 3)
-            return
+            self.add_output_line("Scan send timeout - No packets sent", 3)
+            self.set_status("Scan failed to send", 3, 5)
+            # Try with direct call as a fallback
+            try:
+                self.add_output_line("Attempting direct scan as fallback...", 2)
+                direct_success = self.mgr.netat_scan(retries=5, retry_delay=0.2)
+                if not direct_success:
+                    self.add_output_line("Direct scan attempt failed", 3)
+                    return
+                else:
+                    self.add_output_line("Direct scan succeeded, listening for responses", 1)
+            except Exception as e:
+                self.add_output_line(f"Direct scan failed: {str(e)[:50]}", 3)
+                return
         
+        # Start collecting device responses
+        self.add_output_line("Listening for device responses...", 1)
         self.start_device_collection(scan_devices)
         
     def start_device_collection(self, device_list):
         def collect_devices():
             start_time = time.time()
             timeout = self.mgr.scan_timeout
+            last_status_update = start_time
+            status_interval = 0.5  # Update status every half second
+            check_interval = 0.05  # Process packets more frequently
+            
+            # Set initial status
+            self.set_status("Listening for device responses", 6, 0)
             
             while (time.time() - start_time) < timeout:
                 if self.operation_cancelled:
+                    self.set_status("Scan cancelled", 3, 3)
                     break
                     
-                new_devices = []
-                for packet in self.mgr.captured_packets[:]:
-                    try:
-                        if packet.haslayer(UDP) and packet[UDP].dport == self.mgr.port:
-                            payload = bytes(packet[UDP].payload)
-                            cmd = WnbNetatCmd.from_bytes(payload)
-                            
-                            if cmd.dest == self.mgr.cookie and cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
-                                if cmd.src not in device_list:
-                                    device_list.append(cmd.src)
-                                    new_devices.append(cmd.src)
-                                    device_mac = ':'.join(f'{b:02x}' for b in cmd.src)
-                                    self.add_output_line(f"Found device: {device_mac}", 1)
-                        
-                        self.mgr.captured_packets.remove(packet)
-                    except:
-                        continue
+                # Update status periodically
+                current_time = time.time()
+                if current_time - last_status_update >= status_interval:
+                    elapsed = current_time - start_time
+                    percent = int((elapsed / timeout) * 100)
+                    remaining = timeout - elapsed
+                    self.set_status(f"Scanning: {percent}% ({remaining:.1f}s left)", 6, 0)
+                    last_status_update = current_time
                 
-                time.sleep(0.1)
+                # Process any packets we've received
+                new_devices = []
+                try:
+                    for packet in self.mgr.captured_packets[:]:
+                        try:
+                            if packet.haslayer(UDP) and packet[UDP].dport == self.mgr.port:
+                                payload = bytes(packet[UDP].payload)
+                                cmd = WnbNetatCmd.from_bytes(payload)
+                                
+                                if cmd.dest == self.mgr.cookie and cmd.cmd == WNB_NETAT_CMD_SCAN_RESP:
+                                    if cmd.src not in device_list:
+                                        device_list.append(cmd.src)
+                                        new_devices.append(cmd.src)
+                                        device_mac = ':'.join(f'{b:02x}' for b in cmd.src)
+                                        self.add_output_line(f"Found device: {device_mac}", 1)
+                                        # Flash a success status message
+                                        self.set_status(f"Found device: {device_mac}", 1, 1)
+                            
+                            self.mgr.captured_packets.remove(packet)
+                        except Exception as e:
+                            # More detailed exception handling
+                            if self.mgr.debug:
+                                self.add_output_line(f"Packet processing error: {str(e)[:50]}", 3)
+                            continue
+                except Exception as e:
+                    # Log any outer exception
+                    if self.mgr.debug:
+                        self.add_output_line(f"Packet loop error: {str(e)[:50]}", 3)
+                
+                # Force screen refresh if we found devices
+                if new_devices:
+                    self.draw_screen()
+                
+                # Keep UI responsive
+                self.stdscr.timeout(20)
+                try:
+                    key = self.stdscr.getch()
+                    if key == 3:  # CTRL+C
+                        self.operation_cancelled = True
+                        break
+                except:
+                    pass
+                
+                # Short sleep between checks
+                time.sleep(check_interval)
+                # Update screen for smooth animations
+                self.draw_screen()
             
             # Cleanup
             try:
@@ -988,7 +1266,20 @@ class CursesInterface:
             
             # Process results
             if device_list:
-                self.add_output_line(f"Found {len(device_list)} device(s) total", 1)
+                count_msg = f"Found {len(device_list)} device(s) total"
+                self.add_output_line(count_msg, 1)
+                self.set_status(count_msg, 1, 3)
+                
+                # Store discovered devices for later selection
+                self.discovered_devices = device_list.copy()
+                
+                # If more than one device found, show selection window
+                if len(device_list) > 1:
+                    self.add_output_line("Press F1 to open device selection window", 4)
+                    # Trigger device selection window if available
+                    self.create_device_selection_window()
+                
+                # Auto-select first device
                 self.mgr.dest = device_list[0]
                 device_mac = ':'.join(f'{b:02x}' for b in device_list[0])
                 self.add_output_line(f"Auto-selected: {device_mac}", 1)
@@ -998,11 +1289,111 @@ class CursesInterface:
                     self.add_output_line(f"Log file updated: {new_filename}", 4)
             else:
                 self.add_output_line("No devices found", 3)
+                self.set_status("Scan complete - No devices found", 3, 5)
             
             self.stop_wait_feedback()
+            
+            # Final screen refresh
+            self.draw_screen()
         
         device_thread = threading.Thread(target=collect_devices, daemon=True)
         device_thread.start()
+            
+    def create_device_selection_window(self):
+        if self.discovered_devices:
+            # We have devices, so we'll show a status message
+            self.set_status("Press F1 to select device from list", 4, 5)
+            self.draw_screen()
+        else:
+            # No devices discovered yet
+            self.add_output_line("No devices discovered yet. Run 'scan' first.", 3)
+            self.set_status("No devices to select", 3, 3)
+        
+    def show_device_selection_window(self):
+        if not self.discovered_devices:
+            self.add_output_line("No devices found. Run 'scan' first.", 3)
+            return
+            
+        # Save current state
+        curses.curs_set(0)  # Hide cursor
+        
+        # Calculate window dimensions
+        height, width = self.stdscr.getmaxyx()
+        win_height = min(len(self.discovered_devices) + 4, height - 4)
+        win_width = min(50, width - 4)
+        win_y = (height - win_height) // 2
+        win_x = (width - win_width) // 2
+        
+        # Create window
+        win = curses.newwin(win_height, win_width, win_y, win_x)
+        win.keypad(True)
+        win.box()
+        
+        # Add title
+        title = " Device Selection "
+        win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(1) | curses.A_BOLD)
+        
+        # Add instructions
+        instructions = "↑/↓: Navigate | Enter: Select | Esc: Cancel"
+        win.addstr(win_height - 1, 1, instructions, curses.color_pair(4))
+        
+        # Initialize selection
+        selected = 0
+        offset = 0
+        max_devices = win_height - 4  # Account for border, title, and instructions
+        
+        # Event loop for device selection
+        while True:
+            # Display devices
+            for i in range(min(max_devices, len(self.discovered_devices))):
+                idx = i + offset
+                if idx < len(self.discovered_devices):
+                    device = self.discovered_devices[idx]
+                    device_mac = ':'.join(f'{b:02x}' for b in device)
+                    
+                    # Highlight selected device
+                    if idx == selected:
+                        win.addstr(i + 1, 1, f"> {device_mac}", curses.color_pair(1) | curses.A_REVERSE)
+                    else:
+                        win.addstr(i + 1, 1, f"  {device_mac}", curses.color_pair(5))
+                        
+                    # Clear to end of line
+                    win.clrtoeol()
+            
+            win.refresh()
+            
+            # Get user input
+            key = win.getch()
+            
+            if key in [curses.KEY_UP, ord('k')]:
+                # Move selection up
+                if selected > 0:
+                    selected -= 1
+                    if selected < offset:
+                        offset = selected
+            elif key in [curses.KEY_DOWN, ord('j')]:
+                # Move selection down
+                if selected < len(self.discovered_devices) - 1:
+                    selected += 1
+                    if selected >= offset + max_devices:
+                        offset = selected - max_devices + 1
+            elif key in [curses.KEY_ENTER, ord('\n'), 10, 13]:
+                # Select device
+                if 0 <= selected < len(self.discovered_devices):
+                    self.mgr.dest = self.discovered_devices[selected]
+                    device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
+                    self.add_output_line(f"Selected device: {device_mac}", 1)
+                    
+                    if self.mgr.log_responses:
+                        new_filename = self.mgr.update_log_filename_for_device()
+                        self.add_output_line(f"Log file updated: {new_filename}", 4)
+                    break
+            elif key in [27, curses.KEY_EXIT, ord('q')]:  # ESC or q
+                # Cancel selection
+                break
+                
+        # Restore cursor
+        curses.curs_set(1)
             
     def send_at_command(self, command):
         self.add_output_line(f"Sending: {command}", 4)
@@ -1110,20 +1501,26 @@ class CursesInterface:
         self.active_response_threads.append(response_thread)
             
     def send_device_info_commands(self):
-        info_commands = ["at+ssid?", "at+mode?", "at+keymgmt?", "at+psk?", "at+bss_bw?", "at+chan_list?"]
+        info_commands = ["at+ssid?", "at+mode?", "at+keymgmt?", "at+psk?", "at+bss_bw?", "at+chan_list?", "at+txpower?", "at+rssi?"]
         
         self.add_output_line("Getting device information...", 4)
+        self.set_status("Querying device info", 4, 0)  
         
         total_commands = len(info_commands)
         self.start_wait_feedback(f"Device Info: 0/{total_commands} queries", total_commands * self.mgr.response_timeout)
         
         completed_commands = 0
+        successful_commands = 0
         
         for i, cmd in enumerate(info_commands):
             if self.operation_cancelled:
                 break
             
-            self.wait_operation = f"Device Info: {i+1}/{total_commands} - {cmd.replace('at+', '').replace('?', '').upper()}"
+            # Update both wait spinner and status bar
+            param_name = cmd.replace("at+", "").replace("?", "").upper()
+            self.wait_operation = f"Device Info: {i+1}/{total_commands} - {param_name}"
+            self.set_status(f"Querying: {param_name} ({i+1}/{total_commands})", 6, 0)  # No timeout, will be updated
+            self.draw_screen()  # Force screen refresh
             
             cmd_responses = []
             cmd_error = [None]
@@ -1135,38 +1532,83 @@ class CursesInterface:
                     self.mgr.start_packet_capture()
                     self.mgr.netat_send(cmd)
                     cmd_sent[0] = True
-                    
                 except Exception as e:
                     cmd_error[0] = str(e)
             
             cmd_thread = threading.Thread(target=send_cmd_thread, daemon=True)
             cmd_thread.start()
             
-            cmd_thread.join(timeout=1.0)
+            # Process UI events while waiting for thread to complete
+            start_wait = time.time()
+            while cmd_thread.is_alive() and time.time() - start_wait < 1.0:
+                self.stdscr.timeout(20)  # Very short timeout for maximally responsive UI
+                try:
+                    key = self.stdscr.getch()
+                    if key == 3:  # CTRL+C
+                        self.operation_cancelled = True
+                        break
+                    elif key != -1:  # Any other key pressed - acknowledge it by refreshing
+                        self.draw_screen()
+                except:
+                    pass
+                
+                # Keep the UI updated with very short sleeps for better responsiveness
+                time.sleep(0.03)
+                self.draw_screen()
             
+            if self.operation_cancelled:
+                break
+                
             if cmd_error[0]:
-                param_name = cmd.replace("at+", "").replace("?", "").upper()
                 self.add_output_line(f"{param_name}: Error - {cmd_error[0]}", 3)
+                self.set_status(f"Error with {param_name}", 3, 3)
                 continue
             
             if not cmd_sent[0]:
-                param_name = cmd.replace("at+", "").replace("?", "").upper()
                 self.add_output_line(f"{param_name}: Send timeout", 3)
+                self.set_status(f"Timeout sending {param_name}", 3, 3)
                 continue
             
+            # Start response collection in background
             self.start_single_response_collection(cmd_responses, cmd, i+1, total_commands)
             
             max_wait = self.mgr.response_timeout
             start_time = time.time()
+            last_status_update = start_time
+            update_interval = 0.25  # Update status every 250ms
             
+            # Process UI events while waiting for response
             while (time.time() - start_time) < max_wait and not self.operation_cancelled:
                 if cmd_responses: 
                     break
-                time.sleep(0.1)
+                    
+                # Update status bar periodically to show progress
+                current_time = time.time()
+                if current_time - last_status_update >= update_interval:
+                    elapsed = current_time - start_time
+                    percent = int((elapsed / max_wait) * 100)
+                    self.set_status(f"Waiting for {param_name}: {percent}% ({elapsed:.1f}s)", 6, 0)
+                    last_status_update = current_time
+                
+                # Keep UI responsive with very short timeout
+                self.stdscr.timeout(20)
+                try:
+                    key = self.stdscr.getch()
+                    if key == 3:  # CTRL+C
+                        self.operation_cancelled = True
+                        break
+                    elif key != -1:  # Any other key - acknowledge by refreshing
+                        self.draw_screen()
+                except:
+                    pass
+                
+                # Very short sleep for better responsiveness
+                time.sleep(0.02)
+                self.draw_screen()
             
+            # Process response
             if cmd_responses and not self.operation_cancelled:
                 combined_response = parse_at_response(cmd_responses)
-                param_name = cmd.replace("at+", "").replace("?", "").upper()
                 self.add_output_line(f"{param_name}: {combined_response}", 1)
                 
                 if self.mgr.log_responses:
@@ -1174,9 +1616,14 @@ class CursesInterface:
                     self.mgr.log_response(cmd, combined_response, device_mac)
                     
                 completed_commands += 1
+                successful_commands += 1
+                # Flash success status briefly
+                self.set_status(f"{param_name}: {combined_response[:25]}{'...' if len(combined_response) > 25 else ''}", 1, 1)
             elif not self.operation_cancelled:
-                param_name = cmd.replace("at+", "").replace("?", "").upper()
                 self.add_output_line(f"{param_name}: No response", 3)
+                completed_commands += 1
+                # Flash error status briefly
+                self.set_status(f"No response for {param_name}", 3, 1)
             
             try:
                 self.mgr.stop_packet_capture()
@@ -1186,17 +1633,27 @@ class CursesInterface:
             
             if self.operation_cancelled:
                 self.add_output_line("Device info query cancelled", 3)
+                self.set_status("Operation cancelled", 3, 3)
                 break
                 
+            # Update UI before moving to next command
+            self.draw_screen()
             time.sleep(0.1)
         
         self.stop_wait_feedback()
         
         if not self.operation_cancelled:
-            if completed_commands > 0:
-                self.add_output_line(f"Device info complete: {completed_commands}/{total_commands} successful", 1)
+            if successful_commands > 0:
+                result_msg = f"Device info complete: {successful_commands}/{total_commands} successful"
+                self.add_output_line(result_msg, 1)
+                self.set_status(f"Info: {successful_commands}/{total_commands} OK", 1, 5)  # Short status message
             else:
-                self.add_output_line("Device info failed: No responses received", 3)
+                error_msg = "Device info failed: No responses received"
+                self.add_output_line(error_msg, 3)
+                self.set_status("Info failed", 3, 5)  # Short error message
+                
+            # Final screen refresh to ensure status is shown
+            self.draw_screen()
                 
     def start_single_response_collection(self, response_list, command, current_cmd, total_cmds):
         import threading
@@ -1204,7 +1661,11 @@ class CursesInterface:
         def collect_single_response():
             start_time = time.time()
             timeout = min(self.mgr.response_timeout, 3)
-            check_interval = 0.05
+            check_interval = 0.02  # Shorter interval for faster response checking
+            
+            param_name = command.replace("at+", "").replace("?", "").upper()
+            progress_interval = 0.2  # How often to update progress display
+            last_progress_update = start_time
             
             while (time.time() - start_time) < timeout and not self.operation_cancelled:
                 # Check for new packets
@@ -1229,7 +1690,27 @@ class CursesInterface:
                     pass
                 
                 if new_responses:
+                    # Update status with the first few characters of the response
+                    if new_responses[0]:
+                        short_resp = new_responses[0][:20] + ('...' if len(new_responses[0]) > 20 else '')
+                        try:
+                            # This is called from a background thread, so wrap in try/except
+                            self.set_status(f"Got response: {short_resp}", 1, 0.5)
+                        except:
+                            pass
                     break
+                    
+                # Update progress periodically
+                current_time = time.time()
+                if current_time - last_progress_update >= progress_interval:
+                    elapsed = current_time - start_time
+                    percent = int((elapsed / timeout) * 100)
+                    try:
+                        # This is called from a background thread, so wrap in try/except
+                        self.set_status(f"Waiting for {param_name} response: {percent}%", 6, 0)
+                    except:
+                        pass
+                    last_progress_update = current_time
                     
                 if self.operation_cancelled:
                     break
@@ -1547,7 +2028,8 @@ class CursesInterface:
             "scan                    - Scan for devices",
             "device                  - Show current device",
             "deviceinfo              - Get device information",
-            "setmac <mac>            - Set device MAC",
+            "setmac <mac>            - Set device MAC (TAB for autocomplete)",
+            "F1 key                  - Open device selection window",
             "loadconfig <file>       - Load config file",
             "saveconfig [file]       - Save config file",
             f"debug                   - Toggle debug mode (currently {debug_status})",
@@ -1607,6 +2089,10 @@ class CursesInterface:
                     
                     if key == -1:
                         continue
+                    elif key == curses.KEY_F1:
+                        # F1 key for device selection
+                        self.show_device_selection_window()
+                        self.draw_screen()  # Redraw screen after closing popup
                     elif key == curses.KEY_UP:
                         if self.history and self.history_pos > 0:
                             self.history_pos -= 1
@@ -1679,10 +2165,11 @@ def setup_readline():
     
     def complete_commands(text, state):
         base_commands = ["exit", "scan", "device", "deviceinfo", "help", "setmac", "loadconfig", "saveconfig", "debug", "production_mode"]
+        update_commands = ["update", "check_update", "update force"]
         at_commands = [f"at+{cmd}" for cmd in PRODUCTION_SET_COMMANDS + PRODUCTION_GET_COMMANDS]
         at_get_commands = [f"at+{cmd}?" for cmd in PRODUCTION_GET_COMMANDS]
         
-        all_commands = base_commands + at_commands + at_get_commands
+        all_commands = base_commands + update_commands + at_commands + at_get_commands
         
         matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
         
@@ -1736,29 +2223,52 @@ def parse_at_response(response_list):
     if not response_list:
         return ""
     
-    if isinstance(response_list, list):
-        full_response = ''.join(response_list)
-    else:
-        full_response = response_list
-    
-    lines = full_response.strip().split('\n')
-    clean_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if line and line != "OK" and "valid cmds:" not in line:
+    try:
+        # Handle different input types
+        if isinstance(response_list, list):
+            # Join list items, filtering out any None values and removing null bytes
+            clean_responses = [r.replace('\x00', '') if r else '' for r in response_list]
+            full_response = ''.join(clean_responses)
+        else:
+            # Handle single string, removing null bytes
+            full_response = str(response_list).replace('\x00', '')
+        
+        # Split into lines and process each line
+        lines = full_response.strip().split('\n')
+        clean_lines = []
+        
+        for line in lines:
+            # Clean the line
+            line = line.strip()
+            if not line or line == "OK" or "valid cmds:" in line:
+                continue
+                
+            # Process AT command response format
             if line.startswith('+') and ':' in line:
-                cmd_part, value_part = line.split(':', 1)
-                value = value_part.strip()
-                if value:
-                    clean_lines.append(value)
-    
-    combined = ' '.join(clean_lines)
-    
-    if len(combined) > 175:
-        return '\n'.join(clean_lines)
-    else:
-        return combined if combined else full_response.strip()
+                try:
+                    cmd_part, value_part = line.split(':', 1)
+                    value = value_part.strip()
+                    if value:
+                        clean_lines.append(value)
+                except:
+                    # If split fails, just add the whole line
+                    clean_lines.append(line)
+            else:
+                # For non-standard formatted lines, just add them as is
+                clean_lines.append(line)
+        
+        # Choose output format based on content length
+        combined = ' '.join(clean_lines)
+        
+        if len(combined) > 175 or '\n' in combined or len(clean_lines) > 1:
+            return '\n'.join(clean_lines)  # Multi-line format for long content
+        else:
+            # Single line for short content, fallback to original if empty
+            return combined if combined else full_response.strip()
+    except Exception as e:
+        # Provide fallback for any parsing errors
+        return f"Response parsing error: {str(e)[:50]}...\nRaw: {str(response_list)[:100]}..."
+        
 
 def send_device_info_commands(mgr):
     info_commands = ["at+ssid?", "at+mode?", "at+keymgmt?", "at+psk?", "at+bss_bw?", "at+chan_list?"]
@@ -1906,7 +2416,7 @@ def save_config_file(mgr, filename):
 
 def print_help():
     print("\n" + "=" * 70)
-    print(f"Taixin LibNetat Tool  ({platform.system().upper()})")
+    print(f"Taixin LibNetat Tool v{__version__} ({platform.system().upper()})")
     print("=" * 70)
     print("\nBASIC COMMANDS:")
     print("  exit                    - Exit the program")
@@ -1921,13 +2431,18 @@ def print_help():
     print("  production_mode         - Disable debug commands")
     print("  help                    - Show this help message")
     
+    print("\nUPDATE COMMANDS:")
+    print("  --check-update          - Check for updates")
+    print("  --update                - Download and install updates")
+    print("  --force-update          - Force update even if already on latest version")
+    
     print("\nCONFIG FILE FORMAT:")
     print("  # Comments start with # or //")
     print("  ssid=MyNetwork")
     print("  psk=MyPassword")
     print("  mode=1")
     print("  keymgmt=WPA2-PSK")
-    print("  channel=6")
+    print("  chan_list=9080,9070,8")
     
     print("\nAT COMMANDS:")
     print("  at+<command>=<value>    - Set parameter")
@@ -1947,7 +2462,7 @@ def print_help():
     
     print("=" * 70 + "\n")
 
-def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=8, response_timeout=5, enhanced_ui=False, log_responses=False, log_file="responses.log"):
+def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=3, response_timeout=3, enhanced_ui=False, log_responses=False, log_file="netat-responses.log"):
     if not HAS_SCAPY:
         print("ERROR: Scapy is required for this version")
         print("Install with: pip install scapy")
@@ -1959,7 +2474,7 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=8, respo
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    logging.info(f"Starting Working Scapy NetatMgr on {platform.system()}")
+    logging.info(f"Starting NetatMgr on {platform.system()}")
 
     try:
         mgr = ScapyNetAtMgr(ifname, debug=debug, scan_timeout=scan_timeout, response_timeout=response_timeout, log_responses=log_responses, log_file=log_file)
@@ -2058,14 +2573,14 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=8, respo
             setup_readline()
             
             print("\n" + "="*70)
-            print(f"Taixin LibNetat Tool - CLI Mode")
+            print(f"Taixin LibNetat Tool v{__version__} - CLI Mode")
             print("="*70)
             print(f"Device: {':'.join(f'{b:02x}' for b in mgr.dest)}")
             print(f"Interface: {mgr.ifname} ({mgr.interface_ip})")
             print(f"Timeouts: Scan={scan_timeout}s, Response={response_timeout}s")
             print("Tab completion enabled - try typing 'at+' and press Tab")
             print("Type 'help' for commands, 'debug' to toggle debug mode, or 'exit' to quit")
-            print("Enhanced commands: deviceinfo, loadconfig, saveconfig, debug, logging")
+            print("Enhanced commands: deviceinfo, loadconfig, saveconfig, update, check_update")
             if mgr.log_responses:
                 print(f"Response logging: ENABLED (file: {mgr.log_file})")
             else:
@@ -2121,6 +2636,34 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=8, respo
                     elif input_cmd.lower() == "production_mode":
                         mgr.debug_mode = False
                         print("Production mode enabled (debug commands disabled)")
+                    elif input_cmd.lower() == "update" or input_cmd.lower() == "check_update" or input_cmd.startswith("update "):
+                        # Handle update commands
+                        if 'autoupdate' not in sys.modules:
+                            print("Auto-update functionality not available.")
+                            print("Make sure autoupdate.py is in the same directory.")
+                            continue
+                                
+                        force = False
+                        if input_cmd.startswith("update ") and "force" in input_cmd:
+                            force = True
+                            
+                        if input_cmd.lower() == "check_update":
+                            # Just check for updates
+                            print("Checking for updates...")
+                            has_update, current, latest, release_info = autoupdate.check_for_updates(verbose=True)
+                            
+                            if has_update:
+                                print(f"Update available: {current} → {latest}")
+                                print("Run 'update' to install the update.")
+                                if release_info and 'html_url' in release_info:
+                                    print(f"Release URL: {release_info['html_url']}")
+                            else:
+                                print(f"You are using the latest version: {current}")
+                        else:
+                            # Perform the update
+                            print("Starting update process...")
+                            result = autoupdate.perform_update_command(force=force)
+                            print(result)
                     elif input_cmd.lower().startswith("setmac"):
                         try:
                             _, mac_str = input_cmd.split()
@@ -2180,32 +2723,58 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=8, respo
                     break
 
 if __name__ == "__main__":
-    if not HAS_SCAPY:
-        print("ERROR: Scapy is required for this tool")
-        print("Install with: pip install scapy")
-        sys.exit(1)
-
     parser = argparse.ArgumentParser(description="Taixin Netat Tool")
     
-    available_interfaces = get_network_interfaces()
-    interface_help = f"Network interface to use. Available: {', '.join(available_interfaces[:3])}"
-    if len(available_interfaces) > 3:
-        interface_help += "..."
-    interface_help += " Use 'auto' for automatic selection."
+    # Only get interfaces if scapy is available
+    try:
+        available_interfaces = get_network_interfaces()
+        interface_help = f"Network interface to use. Available: {', '.join(available_interfaces[:3])}"
+        if len(available_interfaces) > 3:
+            interface_help += "..."
+        interface_help += " Use 'auto' for automatic selection."
+    except:
+        interface_help = "Network interface to use. Use 'auto' for automatic selection."
     
     parser.add_argument("interface", nargs='?', default='auto', help=interface_help)
     parser.add_argument("--command", help="Command to send (e.g., 'scan', 'at+fwinfo?', 'deviceinfo', 'saveconfig backup.txt', 'loadconfig backup.txt')")
     parser.add_argument("--dest_mac", help="Destination MAC address")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
-    parser.add_argument("--scan-timeout", type=int, default=8, help="Scan timeout in seconds (default: 8)")
-    parser.add_argument("--response-timeout", type=int, default=5, help="Response timeout in seconds (default: 5)")
+    parser.add_argument("--scan-timeout", type=int, default=3, help="Scan timeout in seconds (default: 3)")
+    parser.add_argument("--response-timeout", type=int, default=3, help="Response timeout in seconds (default: 3)")
     parser.add_argument("--enhanced", action="store_true", help="Use enhanced curses UI (if available)")
     parser.add_argument("--log-responses", action="store_true", help="Enable response logging")
     parser.add_argument("--log-file", default="responses.log", help="Log file for responses (default: responses.log)")
     parser.add_argument("--list-interfaces", action="store_true", help="List available network interfaces")
     parser.add_argument("--test-packet", action="store_true", help="Send test packet")
+    # Add update-related arguments
+    parser.add_argument("--check-update", action="store_true", help="Check for updates")
+    parser.add_argument("--update", action="store_true", help="Download and install updates")
+    parser.add_argument("--force-update", action="store_true", help="Force update even if already on latest version")
     
     args = parser.parse_args()
+    
+    # Handle update-related commands first (these don't require scapy)
+    if args.check_update:
+        if autoupdate:
+            print(autoupdate.check_update_command())
+        else:
+            print("Auto-update functionality not available. Make sure autoupdate.py is in the same directory.")
+        sys.exit(0)
+    
+    if args.update or args.force_update:
+        if not autoupdate:
+            print("Auto-update functionality not available. Make sure autoupdate.py is in the same directory.")
+            sys.exit(1)
+        
+        result = autoupdate.perform_update_command(force=args.force_update)
+        print(result)
+        sys.exit(0)
+    
+    # Now check for scapy for all other operations
+    if not HAS_SCAPY and not (args.check_update or args.update or args.force_update):
+        print("ERROR: Scapy is required for this tool")
+        print("Install with: pip install scapy")
+        sys.exit(1)
     
     if args.list_interfaces:
         interfaces = get_network_interfaces()
@@ -2256,10 +2825,21 @@ if __name__ == "__main__":
                 traceback.print_exc()
         sys.exit(0)
 
-    print(f"Taixin LibNetat Tool - ({platform.system()})")
+    print(f"Taixin LibNetat Tool v{__version__} - ({platform.system()})")
     print("=" * 55)
     print("Updates at https://github.com/aliosa27/taixin_tools")
     print("aliosa27@aliosa27.me")
+    
+    # Auto-check for updates but don't be too intrusive
+    if autoupdate and not args.debug:
+        try:
+            has_update, _, latest, _ = autoupdate.check_for_updates()
+            if has_update:
+                print(f"\nUpdate available: v{latest} (you have v{__version__})")
+                print("Run with --update to install the update.")
+        except Exception:
+            # Silently ignore update check failures in auto-mode
+            pass
     if args.debug:
         print("Debug mode enabled")
     print()
