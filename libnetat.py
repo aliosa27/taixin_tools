@@ -154,7 +154,7 @@ class WnbNetatCmd:
         return cls(cmd, dest, src, payload)
 
 class ScapyNetAtMgr:
-    def __init__(self, ifname, port=NETAT_PORT, debug=False, scan_timeout=5, response_timeout=3, log_responses=False, log_file="responses.log"):
+    def __init__(self, ifname, port=NETAT_PORT, debug=False, scan_timeout=3, response_timeout=3, log_responses=False, log_file="libnetat-responses.log"):
         self.ifname = ifname
         self.port = port
         self.debug = debug
@@ -165,9 +165,9 @@ class ScapyNetAtMgr:
         self.interface_ip = None
         self.interface_mac = None
         self.broadcast_ip = "255.255.255.255"
-        self.debug_mode = False  # Add debug mode flag
+        self.debug_mode = False  
         
-        # Response logging configuration
+        
         self.log_responses = log_responses
         self.log_file = log_file
         self.response_logger = None
