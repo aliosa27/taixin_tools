@@ -7,7 +7,7 @@ import random
 import time
 import sys
 import argparse
-import platform
+import platform as sys_platform  # Renamed to avoid conflicts
 import os
 import threading
 from datetime import datetime
@@ -58,9 +58,9 @@ WNB_NETAT_CMD_SCAN_RESP = 2
 WNB_NETAT_CMD_AT_REQ = 3
 WNB_NETAT_CMD_AT_RESP = 4
 
-IS_WINDOWS = platform.system() == 'Windows'
-IS_MACOS = platform.system() == 'Darwin'
-IS_LINUX = platform.system() == 'Linux'
+IS_WINDOWS = sys_platform.system() == 'Windows'
+IS_MACOS = sys_platform.system() == 'Darwin'
+IS_LINUX = sys_platform.system() == 'Linux'
 
 PRODUCTION_SET_COMMANDS = [
     'mode', 'ssid', 'keymgmt', 'psk', 'pair', 'bss_bw', 'freq_range', 'chan_list', 'txpower', 'acktmo', 'tx_mcs',
@@ -859,7 +859,7 @@ class CursesInterface:
         self.stdscr.clear()
         
         debug_indicator = " [DEBUG MODE]" if self.mgr.debug_mode else ""
-        title = f"Taixin LibNetat Tool - nCurses GUI ({platform.system()}){debug_indicator}"
+        title = f"Taixin LibNetat Tool - nCurses GUI ({sys_platform.system()}){debug_indicator}"
         self.stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(1) | curses.A_BOLD)
         
         # Second line with device info and status in a compact format
@@ -2068,7 +2068,7 @@ class CursesInterface:
     def run(self):
         try:
             self.init_curses()
-            self.add_output_line(f"nCurses GUI started on {platform.system()}", 1)
+            self.add_output_line(f"nCurses GUI started on {sys_platform.system()}", 1)
             self.add_output_line(f"Timeouts: Scan={self.mgr.scan_timeout}s, Response={self.mgr.response_timeout}s", 4)
             self.add_output_line("Type 'debug' to toggle debug mode, 'help' for commands", 4)
             
@@ -2416,7 +2416,7 @@ def save_config_file(mgr, filename):
 
 def print_help():
     print("\n" + "=" * 70)
-    print(f"Taixin LibNetat Tool v{__version__} ({platform.system().upper()})")
+    print(f"Taixin LibNetat Tool v{__version__} ({sys_platform.system().upper()})")
     print("=" * 70)
     print("\nBASIC COMMANDS:")
     print("  exit                    - Exit the program")
@@ -2474,7 +2474,7 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=3, respo
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    logging.info(f"Starting NetatMgr on {platform.system()}")
+    logging.info(f"Starting NetatMgr on {sys_platform.system()}")
 
     try:
         mgr = ScapyNetAtMgr(ifname, debug=debug, scan_timeout=scan_timeout, response_timeout=response_timeout, log_responses=log_responses, log_file=log_file)
@@ -2784,7 +2784,7 @@ if __name__ == "__main__":
             ip_display = ip if ip and ip != "0.0.0.0" else "No IP"
             mac_display = mac if mac else "Unknown MAC"
             print(f"  {i}. {interface:<12} - IP: {ip_display}, MAC: {mac_display}")
-        print(f"\nPlatform: {platform.system()}")
+        print(f"\nPlatform: {sys_platform.system()}")
         print(f"Recommended: {interfaces[0] if interfaces else 'None found'}")
         sys.exit(0)
 
@@ -2825,7 +2825,7 @@ if __name__ == "__main__":
                 traceback.print_exc()
         sys.exit(0)
 
-    print(f"Taixin LibNetat Tool v{__version__} - ({platform.system()})")
+    print(f"Taixin LibNetat Tool v{__version__} - ({sys_platform.system()})")
     print("=" * 55)
     print("Updates at https://github.com/aliosa27/taixin_tools")
     print("aliosa27@aliosa27.me")
