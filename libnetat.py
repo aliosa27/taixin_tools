@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 
 import logging
 import socket
@@ -11,6 +10,13 @@ import platform
 import os
 import threading
 from datetime import datetime
+
+__version__ = "2.0.1"
+
+try:
+    import autoupdate
+except ImportError:
+    autoupdate = None
 
 try:
     from scapy.all import *
@@ -154,7 +160,7 @@ class WnbNetatCmd:
         return cls(cmd, dest, src, payload)
 
 class ScapyNetAtMgr:
-    def __init__(self, ifname, port=NETAT_PORT, debug=False, scan_timeout=3, response_timeout=3, log_responses=False, log_file="libnetat-responses.log"):
+    def __init__(self, ifname, port=NETAT_PORT, debug=False, scan_timeout=6, response_timeout=3, log_responses=False, log_file="libnetat-responses.log"):
         self.ifname = ifname
         self.port = port
         self.debug = debug
@@ -513,6 +519,7 @@ class CursesInterface:
             raise ImportError("Curses not available on this platform")
             
         self.mgr = mgr
+        self.discovered_devices = []  # List to track discovered devices
         self.stdscr = None
         self.history = []
         self.history_pos = 0
@@ -538,6 +545,11 @@ class CursesInterface:
         self.signal_graph_interval = 5.0
         self.signal_history = []
         self.max_signal_history = 50
+        
+        self.status_text = ""
+        self.status_color = 4  # Default to cyan
+        self.status_timeout = 0
+        self.status_set_time = 0
         
         self.setup_output_capture()
         
@@ -586,6 +598,7 @@ class CursesInterface:
         self.wait_timeout = timeout
         self.wait_spinner_pos = 0
         self.last_spinner_update = time.time()
+        self.set_status(f"Processing: {operation}", 6, timeout * 2)
         
     def stop_wait_feedback(self):
         self.waiting_for_response = False
@@ -629,6 +642,26 @@ class CursesInterface:
             self.wait_spinner_pos = (self.wait_spinner_pos + 1) % len(self.wait_spinner)
             self.last_spinner_update = current_time
             
+    def set_status(self, text, color=4, timeout=3):
+        
+        self.status_text = text
+        self.status_color = color  # Default cyan
+        self.status_timeout = timeout
+        self.status_set_time = time.time()
+    
+    def get_status_text(self):
+        
+        if not self.status_text:
+            return ""
+            
+        if self.status_timeout > 0:
+            elapsed = time.time() - self.status_set_time
+            if elapsed > self.status_timeout:
+                self.status_text = ""
+                return ""
+                
+        return self.status_text
+    
     def get_wait_status_line(self):
         if not self.waiting_for_response:
             return ""
@@ -714,6 +747,13 @@ class CursesInterface:
         
         all_commands = base_commands + arg_commands + at_commands
         
+        if text.lower() == "setmac" and self.discovered_devices:
+            device_options = []
+            for device in self.discovered_devices:
+                device_mac = ':'.join(f'{b:02x}' for b in device)
+                device_options.append(f"setmac {device_mac}")
+            return ["setmac"] + device_options
+        
         matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
         return matches
         
@@ -725,11 +765,31 @@ class CursesInterface:
         if not words:
             return
             
+        if len(words) == 1 and words[0].lower() == "setmac" and self.current_command.endswith(" "):
+            if self.discovered_devices:
+                device_options = []
+                for device in self.discovered_devices:
+                    device_mac = ':'.join(f'{b:02x}' for b in device)
+                    device_options.append(device_mac)
+                
+                if len(device_options) == 1:
+                    self.current_command = f"setmac {device_options[0]}"
+                    self.cursor_pos = len(self.current_command)
+                else:
+                    self.add_output_line(f"Devices: {', '.join(device_options)}", 4)
+                return
+        
         current_word = words[-1] if words else ""
         completions = self.get_completions(current_word)
         
         if len(completions) == 1:
             completion = completions[0]
+            
+            if completion.startswith("setmac "):
+                self.current_command = completion
+                self.cursor_pos = len(self.current_command)
+                return
+                
             if words:
                 new_cmd = " ".join(words[:-1]) + " " + completion if len(words) > 1 else completion
             else:
@@ -752,9 +812,27 @@ class CursesInterface:
         
         device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
         device_info = f"Device: {device_mac} | Interface: {self.mgr.ifname} | Timeouts: {self.mgr.scan_timeout}s/{self.mgr.response_timeout}s"
-        if len(device_info) > width - 4:
-            device_info = device_info[:width-7] + "..."
-        self.stdscr.addstr(1, 2, device_info, curses.color_pair(4))
+        
+        status_text = self.get_status_text()
+        
+        if status_text:
+            if len(device_info) < width - 20:  # Leave room for status
+                combined_info = f"{device_info} | Status: {status_text}"
+                if len(combined_info) > width - 4:
+                    combined_info = combined_info[:width-7] + "..."
+                self.stdscr.addstr(1, 2, device_info, curses.color_pair(4))
+                status_start = len(device_info) + 3
+                if status_start + 8 < width:  # Ensure there's room
+                    self.stdscr.addstr(1, status_start, "Status: ", curses.color_pair(4))
+                    self.stdscr.addstr(1, status_start + 8, status_text[:width-status_start-12], curses.color_pair(self.status_color))
+            else:
+                if len(device_info) > width - 4:
+                    device_info = device_info[:width-7] + "..."
+                self.stdscr.addstr(1, 2, device_info, curses.color_pair(4))
+        else:
+            if len(device_info) > width - 4:
+                device_info = device_info[:width-7] + "..."
+            self.stdscr.addstr(1, 2, device_info, curses.color_pair(4))
         
         line_offset = 0
         if self.waiting_for_response:
@@ -763,7 +841,7 @@ class CursesInterface:
                 wait_status = wait_status[:width-7] + "..."
             self.stdscr.addstr(2, 2, wait_status, curses.color_pair(6) | curses.A_BOLD)
             line_offset = 1
-            
+        
         separator_line = 2 + line_offset
         self.stdscr.addstr(separator_line, 0, "─" * width, curses.color_pair(5))
         
@@ -805,7 +883,10 @@ class CursesInterface:
                 cursor_char = cmd_display[self.cursor_pos] if self.cursor_pos < len(cmd_display) else " "
                 self.stdscr.addstr(prompt_y + 1, cursor_x, cursor_char, curses.color_pair(2) | curses.A_REVERSE)
                 
-        help_text = "TAB: complete | UP/DOWN: history | CTRL+C: exit/cancel | 'debug': toggle debug mode"
+        if platform.system() == 'Darwin':
+            help_text = "TAB: complete | UP/DOWN: history | F1: device select | CTRL+C: exit/cancel | 'debug': toggle debug mode"
+        else:
+            help_text = "TAB: complete | UP/DOWN: history | Alt+D: device select | CTRL+C: exit/cancel | 'debug': toggle debug mode"
         if self.waiting_for_response:
             help_text = "Waiting for device response... | CTRL+C: cancel"
             
@@ -846,6 +927,43 @@ class CursesInterface:
             status_text = "enabled" if status else "disabled"
             log_file = self.mgr.log_file if status else "N/A"
             self.add_output_line(f"Response logging {status_text} (file: {log_file})", 1 if status else 2)
+            return
+        elif cmd == "update" or cmd == "check_update" or cmd.startswith("update "):
+            if 'autoupdate' not in sys.modules:
+                self.add_output_line("Auto-update functionality not available.", 3)
+                self.add_output_line("Make sure autoupdate.py is in the same directory.", 3)
+                return
+                
+            force = False
+            if cmd.startswith("update ") and "force" in cmd:
+                force = True
+                
+            if cmd == "check_update":
+                self.add_output_line("Checking for updates...", 4)
+                has_update, current, latest, release_info = autoupdate.check_for_updates(verbose=True)
+                
+                if has_update:
+                    self.add_output_line(f"Update available: {current} → {latest}", 1)
+                    self.add_output_line("Run 'update' to install the update.", 4)
+                    if release_info and 'html_url' in release_info:
+                        self.add_output_line(f"Release URL: {release_info['html_url']}", 4)
+                else:
+                    self.add_output_line(f"You are using the latest version: {current}", 2)
+            else:
+                self.add_output_line("Starting update process...", 4)
+                
+                def update_thread():
+                    try:
+                        if autoupdate.update_from_github(verbose=True):
+                            self.add_output_line("Update completed successfully!", 1)
+                            self.add_output_line("Please restart the application to use the new version.", 2)
+                        else:
+                            self.add_output_line("Update failed. See logs for details.", 3)
+                    except Exception as e:
+                        self.add_output_line(f"Update error: {str(e)}", 3)
+                        
+                update_thread = threading.Thread(target=update_thread, daemon=True)
+                update_thread.start()
             return
         elif cmd.startswith("signalgraph_interval"):
             try:
@@ -932,11 +1050,13 @@ class CursesInterface:
                 
             except Exception as e:
                 scan_error[0] = str(e)
+                if self.debug:
+                    self.add_output_line(f"Debug: Scan error: {str(e)}", 3)
         
         scan_thread = threading.Thread(target=send_scan_thread, daemon=True)
         scan_thread.start()
         
-        scan_thread.join(timeout=1.0)
+        scan_thread.join(timeout=3.0)
         
         if scan_error[0]:
             self.stop_wait_feedback()
@@ -945,7 +1065,7 @@ class CursesInterface:
         
         if not scan_sent[0]:
             self.stop_wait_feedback()
-            self.add_output_line(" Scan send timeout", 3)
+            self.add_output_line(" Scan send timeout (try again or check network connection)", 3)
             return
         
         self.start_device_collection(scan_devices)
@@ -974,21 +1094,35 @@ class CursesInterface:
                                     self.add_output_line(f"Found device: {device_mac}", 1)
                         
                         self.mgr.captured_packets.remove(packet)
-                    except:
+                    except Exception as e:
+                        if self.debug:
+                            self.add_output_line(f"Debug: Packet processing error: {str(e)}", 3)
+                        try:
+                            self.mgr.captured_packets.remove(packet)
+                        except:
+                            pass
                         continue
                 
                 time.sleep(0.1)
             
-            # Cleanup
             try:
                 self.mgr.stop_packet_capture()
             except:
                 pass
             self.stop_output_capture()
             
-            # Process results
             if device_list:
                 self.add_output_line(f"Found {len(device_list)} device(s) total", 1)
+                
+                self.discovered_devices = device_list.copy()
+                
+                if len(device_list) > 1:
+                    if platform.system() == 'Darwin':
+                        self.add_output_line("Press F1 to open device selection window", 4)
+                    else:
+                        self.add_output_line("Press Alt+D to open device selection window", 4)
+                    self.create_device_selection_window()
+                
                 self.mgr.dest = device_list[0]
                 device_mac = ':'.join(f'{b:02x}' for b in device_list[0])
                 self.add_output_line(f"Auto-selected: {device_mac}", 1)
@@ -1001,11 +1135,93 @@ class CursesInterface:
             
             self.stop_wait_feedback()
         
-        device_thread = threading.Thread(target=collect_devices, daemon=True)
-        device_thread.start()
+        try:
+            device_thread = threading.Thread(target=collect_devices, daemon=True)
+            device_thread.start()
+        except Exception as e:
+            self.stop_wait_feedback()
+            self.add_output_line(f"Error starting device collection: {str(e)}", 3)
+            
+    def create_device_selection_window(self):
+        pass
+        
+    def show_device_selection_window(self):
+        
+        if not self.discovered_devices:
+            self.add_output_line("No devices found. Run 'scan' first.", 3)
+            return
+            
+        curses.curs_set(0)  # Hide cursor
+        
+        height, width = self.stdscr.getmaxyx()
+        win_height = min(len(self.discovered_devices) + 4, height - 4)
+        win_width = min(50, width - 4)
+        win_y = (height - win_height) // 2
+        win_x = (width - win_width) // 2
+        
+        win = curses.newwin(win_height, win_width, win_y, win_x)
+        win.keypad(True)
+        win.box()
+        
+        title = " Device Selection "
+        win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(1) | curses.A_BOLD)
+        
+        instructions = "↑/↓: Navigate | Enter: Select | Esc: Cancel"
+        win.addstr(win_height - 1, 1, instructions, curses.color_pair(4))
+        
+        selected = 0
+        offset = 0
+        max_devices = win_height - 4  # Account for border, title, and instructions
+        
+        while True:
+            for i in range(min(max_devices, len(self.discovered_devices))):
+                idx = i + offset
+                if idx < len(self.discovered_devices):
+                    device = self.discovered_devices[idx]
+                    device_mac = ':'.join(f'{b:02x}' for b in device)
+                    
+                    if idx == selected:
+                        win.addstr(i + 1, 1, f"> {device_mac}", curses.color_pair(1) | curses.A_REVERSE)
+                    else:
+                        win.addstr(i + 1, 1, f"  {device_mac}", curses.color_pair(7))
+                        
+                    win.clrtoeol()
+            
+            win.refresh()
+            
+            key = win.getch()
+            
+            if key in [curses.KEY_UP, ord('k')]:
+                if selected > 0:
+                    selected -= 1
+                    if selected < offset:
+                        offset = selected
+            elif key in [curses.KEY_DOWN, ord('j')]:
+                if selected < len(self.discovered_devices) - 1:
+                    selected += 1
+                    if selected >= offset + max_devices:
+                        offset = selected - max_devices + 1
+            elif key in [curses.KEY_ENTER, ord('\n'), 10, 13]:
+                if 0 <= selected < len(self.discovered_devices):
+                    self.mgr.dest = self.discovered_devices[selected]
+                    device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
+                    self.add_output_line(f"Selected device: {device_mac}", 1)
+                    
+                    if self.mgr.log_responses:
+                        new_filename = self.mgr.update_log_filename_for_device()
+                        self.add_output_line(f"Log file updated: {new_filename}", 4)
+                    break
+            elif key in [27, curses.KEY_EXIT, ord('q')]:  # ESC or q
+                break
+                
+        curses.curs_set(1)
             
     def send_at_command(self, command):
         self.add_output_line(f"Sending: {command}", 4)
+        
+        cmd_type = "GET" if "?" in command else "SET"
+        param_name = command.replace("at+", "").replace("?", "").split("=")[0].upper()
+        self.set_status(f"{cmd_type} {param_name}", 6, 0)  # No timeout
         
         operation_name = f"AT Command: {command[:20]}..."
         self.start_wait_feedback(operation_name, self.mgr.response_timeout)
@@ -1032,18 +1248,25 @@ class CursesInterface:
         
         if command_error[0]:
             self.stop_wait_feedback()
-            self.add_output_line(f" Command failed: {command_error[0]}", 3)
+            error_msg = f"Command failed: {command_error[0]}"
+            self.add_output_line(error_msg, 3)
+            self.set_status(error_msg, 3, 5)  # Show error in status bar
             return
         
         if not command_sent[0]:
             self.stop_wait_feedback()
-            self.add_output_line(" Command send timeout", 3)
+            timeout_msg = "Command send timeout"
+            self.add_output_line(timeout_msg, 3)
+            self.set_status(timeout_msg, 3, 5)  # Show error in status bar
             return
         
         self.start_response_collection(command_responses, command)
         
     def start_response_collection(self, response_list, command="unknown"):
         import threading
+        
+        param_name = command.replace("at+", "").replace("?", "").split("=")[0].upper()
+        self.set_status(f"Waiting for {param_name} response...", 6, 0)  # No timeout
         
         def collect_responses():
             start_time = time.time()
@@ -1093,14 +1316,23 @@ class CursesInterface:
                         device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
                         self.mgr.log_response(command, combined_response, device_mac)
                     
+                    is_success = "OK" in combined_response or not ("ERROR" in combined_response or "FAIL" in combined_response)
+                    success_color = 1 if is_success else 2  # Green for success, yellow for partial success
+                    
                     if len(combined_response) > 80:
                         lines = combined_response.split('\n') if '\n' in combined_response else [combined_response[i:i+80] for i in range(0, len(combined_response), 80)]
                         for line in lines:
-                            self.add_output_line(f"Response: {line}", 1)
+                            self.add_output_line(f"Response: {line}", success_color)
                     else:
-                        self.add_output_line(f"Response: {combined_response}", 1)
+                        self.add_output_line(f"Response: {combined_response}", success_color)
+                    
+                    param_name = command.replace("at+", "").replace("?", "").split("=")[0].upper()
+                    short_response = combined_response[:30] + ('...' if len(combined_response) > 30 else '')
+                    self.set_status(f"{param_name}: {short_response}", success_color, 5)  # Show for 5 seconds
                 else:
-                    self.add_output_line("No response received", 3)
+                    no_resp_msg = "No response received"
+                    self.add_output_line(no_resp_msg, 3)
+                    self.set_status(no_resp_msg, 3, 5)  # Show error in status bar
             
             self.stop_wait_feedback()
         
@@ -1113,6 +1345,7 @@ class CursesInterface:
         info_commands = ["at+ssid?", "at+mode?", "at+keymgmt?", "at+psk?", "at+bss_bw?", "at+chan_list?"]
         
         self.add_output_line("Getting device information...", 4)
+        self.set_status("Querying device info", 4, 0)  # Short, concise status
         
         total_commands = len(info_commands)
         self.start_wait_feedback(f"Device Info: 0/{total_commands} queries", total_commands * self.mgr.response_timeout)
@@ -1194,12 +1427,19 @@ class CursesInterface:
         
         if not self.operation_cancelled:
             if completed_commands > 0:
-                self.add_output_line(f"Device info complete: {completed_commands}/{total_commands} successful", 1)
+                result_msg = f"Device info complete: {completed_commands}/{total_commands} successful"
+                self.add_output_line(result_msg, 1)
+                self.set_status(f"Info: {completed_commands}/{total_commands} OK", 1, 5)  # Short status message
             else:
-                self.add_output_line("Device info failed: No responses received", 3)
+                error_msg = "Device info failed: No responses received"
+                self.add_output_line(error_msg, 3)
+                self.set_status("Info failed", 3, 5)  # Short error message
                 
     def start_single_response_collection(self, response_list, command, current_cmd, total_cmds):
         import threading
+        
+        param_name = command.replace("at+", "").replace("?", "").upper()
+        self.set_status(f"{param_name} {current_cmd}/{total_cmds}", 6, 0)  # No timeout, will be updated
         
         def collect_single_response():
             start_time = time.time()
@@ -1207,7 +1447,6 @@ class CursesInterface:
             check_interval = 0.05
             
             while (time.time() - start_time) < timeout and not self.operation_cancelled:
-                # Check for new packets
                 new_responses = []
                 try:
                     for packet in self.mgr.captured_packets[:]:
@@ -1244,9 +1483,12 @@ class CursesInterface:
     def load_config_file(self, filename):
         try:
             self.add_output_line(f"Loading configuration from: {filename}", 4)
+            self.set_status(f"Loading config: {filename}", 4, 0)  # Initial status with no timeout
             
             if not os.path.exists(filename):
-                self.add_output_line(f"✗ Config file not found: {filename}", 3)
+                error_msg = f" Config file not found: {filename}"
+                self.add_output_line(error_msg, 3)
+                self.set_status(error_msg, 3, 5)  # Show error in status bar
                 return
                 
             commands_applied = 0
@@ -1289,13 +1531,13 @@ class CursesInterface:
                     if responses:
                         combined_response = parse_at_response(responses)
                         if "OK" in combined_response or combined_response.strip():
-                            self.add_output_line(f"✓ {param} set successfully", 1)
+                            self.add_output_line(f" {param} set successfully", 1)
                             commands_applied += 1
                         else:
-                            self.add_output_line(f"✗ {param} failed: {combined_response}", 3)
+                            self.add_output_line(f" {param} failed: {combined_response}", 3)
                             commands_failed += 1
                     else:
-                        self.add_output_line(f"✗ {param} failed: No response", 3)
+                        self.add_output_line(f" {param} failed: No response", 3)
                         commands_failed += 1
                         
                     time.sleep(0.2)
@@ -1304,15 +1546,20 @@ class CursesInterface:
                     commands_failed += 1
                     
             total_commands = commands_applied + commands_failed
-            self.add_output_line(f"✓ Config complete: {commands_applied}/{total_commands} applied", 
-                               1 if commands_failed == 0 else 2)
+            result_msg = f" Config complete: {commands_applied}/{total_commands} applied"
+            status_color = 1 if commands_failed == 0 else 2  # Green for all success, yellow for partial
+            self.add_output_line(result_msg, status_color)
+            self.set_status(result_msg, status_color, 5)  # Show in status bar for 5 seconds
                                 
         except Exception as e:
-            self.add_output_line(f"✗ Error loading config: {e}", 3)
+            error_msg = f" Error loading config: {e}"
+            self.add_output_line(error_msg, 3)
+            self.set_status(error_msg, 3, 5)  # Show error in status bar
             
     def save_config_file(self, filename):
         try:
             self.add_output_line(f"Saving configuration to: {filename}", 4)
+            self.set_status(f"Saving config to: {filename}", 4, 0)  # Initial status with no timeout
             
             config_commands = [
                 ("ssid", "at+ssid?"), ("mode", "at+mode?"), ("keymgmt", "at+keymgmt?"),
@@ -1348,9 +1595,9 @@ class CursesInterface:
                         config_data[param_name] = combined_response
                         successful_queries += 1
                         short_resp = combined_response[:30] + ('...' if len(combined_response) > 30 else '')
-                        self.add_output_line(f"✓ {param_name}: {short_resp}", 1)
+                        self.add_output_line(f" {param_name}: {short_resp}", 1)
                     else:
-                        self.add_output_line(f"✗ {param_name}: Invalid response", 3)
+                        self.add_output_line(f" {param_name}: Invalid response", 3)
                 else:
                     self.add_output_line(f"{param_name}: No response", 3)
                     
@@ -1364,13 +1611,19 @@ class CursesInterface:
                     
                     for param, value in config_data.items():
                         f.write(f"{param}={value}\n")
-                        
-                self.add_output_line(f"✓ Config saved: {successful_queries} parameters → {filename}", 1)
+                
+                success_msg = f" Config saved: {successful_queries} parameters → {filename}"
+                self.add_output_line(success_msg, 1)
+                self.set_status(success_msg, 1, 5)  # Show success in status bar
             else:
-                self.add_output_line("✗ No config data - cannot save", 3)
+                error_msg = " No config data - cannot save"
+                self.add_output_line(error_msg, 3)
+                self.set_status(error_msg, 3, 5)  # Show error in status bar
                 
         except Exception as e:
-            self.add_output_line(f"✗ Error saving config: {e}", 3)
+            error_msg = f" Error saving config: {e}"
+            self.add_output_line(error_msg, 3)
+            self.set_status(error_msg, 3, 5)  # Show error in status bar
             
     def start_signal_graph(self):
         if self.signal_graph_active:
@@ -1387,7 +1640,6 @@ class CursesInterface:
                 if self.operation_cancelled:
                     break
                     
-                # Send RSSI query
                 rssi_responses = []
                 rssi_error = [None]
                 
@@ -1427,7 +1679,6 @@ class CursesInterface:
                         except:
                             pass
                 
-                # Get RSSI reading
                 rssi_thread = threading.Thread(target=get_rssi, daemon=True)
                 rssi_thread.start()
                 rssi_thread.join(timeout=3)
@@ -1547,7 +1798,9 @@ class CursesInterface:
             "scan                    - Scan for devices",
             "device                  - Show current device",
             "deviceinfo              - Get device information",
-            "setmac <mac>            - Set device MAC",
+            "setmac <mac>            - Set device MAC (TAB for autocompletion)",
+            ("F1" if platform.system() == 'Darwin' else "Alt+D") + "                   - Open device selection window",
+            "update                  - Check for and install updates",
             "loadconfig <file>       - Load config file",
             "saveconfig [file]       - Save config file",
             f"debug                   - Toggle debug mode (currently {debug_status})",
@@ -1590,6 +1843,9 @@ class CursesInterface:
             self.add_output_line(f"Timeouts: Scan={self.mgr.scan_timeout}s, Response={self.mgr.response_timeout}s", 4)
             self.add_output_line("Type 'debug' to toggle debug mode, 'help' for commands", 4)
             
+            device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
+            self.set_status(f"Ready - Connected to {device_mac}", 4, 5)  # Show initial status for 5 seconds
+            
             last_command_time = 0
             command_cooldown = 0.5
             
@@ -1607,6 +1863,9 @@ class CursesInterface:
                     
                     if key == -1:
                         continue
+                    elif key == curses.KEY_F1 and platform.system() == 'Darwin':
+                        self.show_device_selection_window()
+                        self.draw_screen()  # Redraw screen after closing popup
                     elif key == curses.KEY_UP:
                         if self.history and self.history_pos > 0:
                             self.history_pos -= 1
@@ -1654,6 +1913,20 @@ class CursesInterface:
                             continue
                         else:
                             self.running = False
+                    elif key == 27:  # ESC or Alt key prefix
+                        self.stdscr.timeout(0)
+                        next_key = self.stdscr.getch()
+                        self.stdscr.timeout(25 if not self.waiting_for_response else 50)
+                        
+                        if not platform.system() == 'Darwin' and (next_key == ord('d') or next_key == ord('D')):  # Alt+D on other platforms
+                            self.show_device_selection_window()
+                            self.draw_screen()  # Redraw screen after closing popup
+                        else:
+                            if self.waiting_for_response:
+                                self.operation_cancelled = True
+                            else:
+                                self.current_command = ""
+                                self.cursor_pos = 0
                     elif 32 <= key <= 126:
                         if not self.waiting_for_response:
                             char = chr(key)
@@ -2197,13 +2470,16 @@ if __name__ == "__main__":
     parser.add_argument("--command", help="Command to send (e.g., 'scan', 'at+fwinfo?', 'deviceinfo', 'saveconfig backup.txt', 'loadconfig backup.txt')")
     parser.add_argument("--dest_mac", help="Destination MAC address")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
-    parser.add_argument("--scan-timeout", type=int, default=8, help="Scan timeout in seconds (default: 8)")
+    parser.add_argument("--scan-timeout", type=int, default=3, help="Scan timeout in seconds (default: 8)")
     parser.add_argument("--response-timeout", type=int, default=5, help="Response timeout in seconds (default: 5)")
     parser.add_argument("--enhanced", action="store_true", help="Use enhanced curses UI (if available)")
     parser.add_argument("--log-responses", action="store_true", help="Enable response logging")
     parser.add_argument("--log-file", default="responses.log", help="Log file for responses (default: responses.log)")
     parser.add_argument("--list-interfaces", action="store_true", help="List available network interfaces")
     parser.add_argument("--test-packet", action="store_true", help="Send test packet")
+    parser.add_argument("--check-update", action="store_true", help="Check for updates")
+    parser.add_argument("--update", action="store_true", help="Download and install updates")
+    parser.add_argument("--force-update", action="store_true", help="Force update even if already on latest version")
     
     args = parser.parse_args()
     
@@ -2216,9 +2492,26 @@ if __name__ == "__main__":
             mac_display = mac if mac else "Unknown MAC"
             print(f"  {i}. {interface:<12} - IP: {ip_display}, MAC: {mac_display}")
         print(f"\nPlatform: {platform.system()}")
+        sys.exit(0)
         print(f"Recommended: {interfaces[0] if interfaces else 'None found'}")
         sys.exit(0)
 
+    if args.check_update:
+        if autoupdate:
+            print(autoupdate.check_update_command())
+        else:
+            print("Auto-update functionality not available. Make sure autoupdate.py is in the same directory.")
+        sys.exit(0)
+    
+    if args.update or args.force_update:
+        if not autoupdate:
+            print("Auto-update functionality not available. Make sure autoupdate.py is in the same directory.")
+            sys.exit(1)
+        
+        result = autoupdate.perform_update_command(force=args.force_update)
+        print(result)
+        sys.exit(0)
+    
     if args.test_packet:
         print(f"Testing packet transmission with Scapy on {args.interface}...")
         try:
@@ -2235,10 +2528,10 @@ if __name__ == "__main__":
             time.sleep(1)
             mgr.stop_packet_capture()
             
-            print("✓ Test packet sent successfully via Scapy")
+            print(" Test packet sent successfully via Scapy")
             captured_count = len(mgr.captured_packets)
             if captured_count > 0:
-                print(f"✓ Captured {captured_count} packets during test")
+                print(f" Captured {captured_count} packets during test")
             else:
                 print("! No packets captured (this may be normal depending on network setup)")
             
@@ -2248,7 +2541,7 @@ if __name__ == "__main__":
             print("3. Try running with sudo if needed")
             
         except Exception as e:
-            print(f"✗ Test packet failed: {e}")
+            print(f" Test packet failed: {e}")
             if "Operation not permitted" in str(e) or "Permission denied" in str(e):
                 print("Try running with sudo: sudo python3 fixed_netat_tool.py --test-packet")
             if args.debug:
@@ -2256,10 +2549,19 @@ if __name__ == "__main__":
                 traceback.print_exc()
         sys.exit(0)
 
-    print(f"Taixin LibNetat Tool - ({platform.system()})")
+    print(f"Taixin LibNetat Tool v{__version__} - ({platform.system()})")
     print("=" * 55)
     print("Updates at https://github.com/aliosa27/taixin_tools")
     print("aliosa27@aliosa27.me")
+    
+    if autoupdate and not args.debug:
+        try:
+            has_update, _, latest, _ = autoupdate.check_for_updates()
+            if has_update:
+                print(f"\nUpdate available: v{latest} (you have v{__version__})")
+                print("Run with --update to install the update.")
+        except Exception:
+            pass
     if args.debug:
         print("Debug mode enabled")
     print()
