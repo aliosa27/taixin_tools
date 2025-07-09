@@ -63,6 +63,7 @@ IS_MACOS = sys_platform.system() == 'Darwin'
 IS_LINUX = sys_platform.system() == 'Linux'
 
 PRODUCTION_SET_COMMANDS = [
+    # Original commands
     'mode', 'ssid', 'keymgmt', 'psk', 'pair', 'bss_bw', 'freq_range', 'chan_list', 'txpower', 'acktmo', 'tx_mcs',
     'joingroup', 'r_ssid', 'r_psk', 'roam', 'loaddef', 'fwupg', 'beacon_int', 'dtim_period', 'agg_cnt', 'wakeup',
     'heart_int', 'country_region', 'channel', 'rts_threshold', 'frag_threshold', 'bssid_filter', 'tx_bw', 'acs',
@@ -75,14 +76,60 @@ PRODUCTION_SET_COMMANDS = [
     'mgmtframe', 'wkdata_mask', 'driverdata', 'freqinfo', 'blenc', 'sleep', 'hwscan', 'user_edca', 'fix_txrate',
     'nav_max', 'clr_nav', 'cca_param', 'tx_modgain', 'rts_duration', 'disable_print', 'conn_paironly', 'diffcust_conn',
     'wait_psmode', 'standby', 'ap_chansw', 'cca_ce', 'rtc', 'apep_padding', 'watchdog', 'retry_fallback_cnt',
-    'fallback_mcs', 'xosc', 'freq_cali_period', 'cust_drvdata', 'max_txdelay', 'heartbeat_int'
+    'fallback_mcs', 'xosc', 'freq_cali_period', 'cust_drvdata', 'max_txdelay', 'heartbeat_int',
+    
+    # New 2.x firmware commands - Basic Networking
+    'wifimode', 'encrypt', 'key',
+    
+    # New 2.x firmware commands - Advanced Networking
+    'aphide', 'scan', 
+    
+    # New 2.x firmware commands - Debug
+    'syscfg', 'loaddef', 'rst', 'jtag', 'tx_pwr_super', 'version',
+    
+    # New 2.x firmware commands - Hibernation
+    'dsleep',
+    
+    # New 2.x firmware commands - Relay
+    'r_key',
+    
+    # New 2.x firmware commands - Roaming
+    'roam',
+    
+    # New 2.x firmware commands - Network
+    'iperf2', 'ping',
+    
+    # New 2.x firmware commands - Test Mode
+    'test_start', 'lo_freq', 'tx_start', 'tx_mcs',
 ]
 
 PRODUCTION_GET_COMMANDS = [
+    # Original commands
     'mode', 'ssid', 'keymgmt', 'psk', 'bss_bw', 'freq_range', 'chan_list', 'txpower', 'acktmo', 'tx_mcs', 'rssi',
     'conn_state', 'wnbcfg', 'sta_list', 'scan_list', 'bssid', 'agg_cnt', 'battery_level', 'module_type', 'disassoc_reason',
     'ant_sel', 'wkreason', 'wkdata_buff', 'temperature', 'sta_count', 'txq_param', 'nav', 'rtc', 'bgrssi', 'center_freq',
-    'acs_result', 'reason_code', 'status_code', 'dhcpc_result', 'xosc', 'freq_offset', 'fwinfo', 'stainfo', 'signal'
+    'acs_result', 'reason_code', 'status_code', 'dhcpc_result', 'xosc', 'freq_offset', 'fwinfo', 'stainfo', 'signal',
+    
+    # New 2.x firmware commands - Basic Networking
+    'wifimode', 'encrypt', 'key', 
+    
+    # New 2.x firmware commands - Advanced Networking
+    'aphide', 'channel',
+    
+    # New 2.x firmware commands - Debug
+    'syscfg', 'version',
+    
+    # New 2.x firmware commands - Hibernation
+    'dsleep',
+    
+    # New 2.x firmware commands - Relay
+    'r_ssid', 'r_key',
+    
+    # New 2.x firmware commands - Roaming
+    'roam',
+    
+    # New 2.x firmware commands - Test Mode
+    'test_start', 'lo_freq', 'tx_start', 'tx_mcs'
 ]
 
 DEBUG_SET_COMMANDS = [
@@ -107,6 +154,32 @@ DEBUG_GET_COMMANDS = [
 
 SET_COMMANDS = PRODUCTION_SET_COMMANDS + DEBUG_SET_COMMANDS
 GET_COMMANDS = PRODUCTION_GET_COMMANDS + DEBUG_GET_COMMANDS
+
+# Netlog packet types
+NETLOG_PKT_TYPE_DISCOVERY = 1
+NETLOG_PKT_TYPE_DISCOVERY_RESP = 2
+NETLOG_PKT_TYPE_HEARTBEAT = 3
+NETLOG_PKT_TYPE_LOG_DATA = 4
+
+class NetlogPacket:
+    def __init__(self, pkt_type=0, signature=b"\x00" * 6, data=b""):
+        self.pkt_type = pkt_type
+        self.signature = signature[:6].ljust(6, b'\x00')  # Ensure 6 bytes
+        self.data = data
+    
+    def to_bytes(self):
+        return bytes([self.pkt_type]) + self.signature + self.data
+    
+    @classmethod
+    def from_bytes(cls, data):
+        if len(data) < 7:
+            raise ValueError("Packet too short")
+        
+        pkt_type = data[0]
+        signature = data[1:7]
+        payload = data[7:] if len(data) > 7 else b""
+        
+        return cls(pkt_type, signature, payload)
 
 def get_network_interfaces():
     if not HAS_SCAPY:
@@ -164,6 +237,25 @@ class WnbNetatCmd:
         return cls(cmd, dest, src, payload)
 
 class ScapyNetAtMgr:
+    def log_netlog(self, message, debug_only=False):
+        # Only show debug messages if debug is enabled
+        if debug_only and not self.debug:
+            return
+            
+        # First try using the display callback for UI integration
+        if hasattr(self, 'netlog_display_callback') and callable(self.netlog_display_callback):
+            try:
+                # Add timestamp to the message
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.netlog_display_callback(f"[{timestamp}] {message}")
+                return  # Successfully used callback
+            except Exception as e:
+                if self.debug:
+                    print(f"Error using netlog display callback: {e}")
+        
+        # Fall back to standard print if no callback or it failed
+        print(f"NETLOG: {message}")
+        
     def __init__(self, ifname, port=NETAT_PORT, debug=False, scan_timeout=3, response_timeout=3, log_responses=False, log_file="libnetat-responses.log"):
         self.ifname = ifname
         self.port = port
@@ -177,6 +269,14 @@ class ScapyNetAtMgr:
         self.broadcast_ip = "255.255.255.255"
         self.debug_mode = False  
         
+        # Netlog properties
+        self.netlog_active = False
+        self.netlog_signature = None
+        self.netlog_thread = None
+        self.netlog_stop = threading.Event()
+        self.netlog_device_signature = None
+        self.netlog_device_discovered = False
+        self.netlog_discovered_devices = []
         
         self.log_responses = log_responses
         self.log_file = log_file
@@ -302,11 +402,15 @@ class ScapyNetAtMgr:
         
         def capture_worker():
             try:
-                bpf_filter = f"udp and (port {self.port} or port {NETLOG_PORT})"
+                # Create BPF filters for both NetAT and Netlog packets
+                netat_filter = f"udp port {self.port}"
+                netlog_filter = f"udp port {NETLOG_PORT}"
+                combined_filter = f"({netat_filter}) or ({netlog_filter})"
+                
                 if self.debug:
                     print(f"Starting packet capture on {self.ifname}")
-                    print(f"  Filter: {bpf_filter}")
-                    print(f"  Looking for packets to/from this host")
+                    print(f"  Filter: {combined_filter}")
+                    print(f"  Interface: {self.ifname} ({self.interface_ip})")
                 
                 def packet_handler(packet):
                     if self.stop_capture.is_set():
@@ -314,15 +418,39 @@ class ScapyNetAtMgr:
                     
                     if packet.haslayer(UDP):
                         udp_layer = packet[UDP]
-                        if udp_layer.dport == self.port or udp_layer.sport == self.port or \
-                           udp_layer.dport == NETLOG_PORT or udp_layer.sport == NETLOG_PORT:
+                        
+                        # Handle NETLOG packets - process them immediately
+                        if udp_layer.dport == NETLOG_PORT and packet.haslayer(Raw):
+                            # Skip packets we sent ourselves
+                            if packet.haslayer(IP) and packet[IP].src == self.interface_ip:
+                                return
+                            
+                            # Process netlog packet immediately
+                            try:
+                                raw_data = bytes(packet[Raw])
+                                if len(raw_data) >= 7:  # Minimum packet size
+                                    netlog_pkt = NetlogPacket.from_bytes(raw_data)
+                                    self.process_netlog_packet(netlog_pkt, packet)
+                            except Exception as e:
+                                if self.debug:
+                                    print(f"Error processing NETLOG packet: {e}")
+                        
+                        # Store NetAT packets for later processing
+                        elif udp_layer.dport == self.port or udp_layer.sport == self.port:
+                            # Skip packets we sent ourselves
+                            if packet.haslayer(IP) and packet[IP].src == self.interface_ip:
+                                if self.debug:
+                                    print(f"Skipping our own packet to {packet[IP].dst}")
+                                return
+                                
                             self.captured_packets.append(packet)
                             if self.debug:
                                 src_ip = packet[IP].src if packet.haslayer(IP) else "unknown"
-                                print(f"Captured: {len(udp_layer.payload)} bytes from {src_ip}:{udp_layer.sport}")
+                                print(f"Captured NETAT: {len(udp_layer.payload)} bytes from {src_ip}:{udp_layer.sport}")
                 
-                sniff(iface=self.ifname, filter=bpf_filter, prn=packet_handler, 
-                      stop_filter=lambda p: self.stop_capture.is_set(), timeout=0.5)
+                # Use store=0 and continuous sniffing like the original netlog.py
+                sniff(iface=self.ifname, filter=combined_filter, prn=packet_handler, 
+                      stop_filter=lambda p: self.stop_capture.is_set(), store=0)
                       
             except Exception as e:
                 if self.debug:
@@ -338,6 +466,536 @@ class ScapyNetAtMgr:
         self.stop_capture.set()
         if self.capture_thread:
             self.capture_thread.join(timeout=2)
+            
+    def start_netlog(self, specific_mac=None):
+        if self.netlog_active:
+            if self.debug:
+                print("Netlog already active")
+            return False
+        
+        # Print interface and network information if in debug mode
+        if self.debug:
+            print(f"Starting netlog on interface: {self.ifname}")
+            print(f"  IP address: {self.interface_ip}")
+            print(f"  MAC address: {self.interface_mac}")
+            print(f"  Broadcast address: {self.broadcast_ip}")
+            print(f"  Netlog port: {NETLOG_PORT}")
+            
+        # Generate a unique signature for this session
+        self.netlog_signature = os.urandom(6)
+        self.netlog_stop.clear()
+        self.netlog_device_discovered = False
+        self.netlog_discovered_devices = []
+        
+        # We used to set netlog_device_discovered = True when specific_mac was provided,
+        # but this caused issues with protocol handshake. Now we always do discovery first,
+        # and the specific device (if provided) will be selected after discovery responses.
+        if specific_mac and self.debug:
+            if isinstance(specific_mac, str):
+                try:
+                    mac_str = specific_mac
+                    specific_mac = bytes.fromhex(specific_mac.replace(':', ''))
+                except:
+                    if self.debug:
+                        print(f"Invalid MAC format: {specific_mac}")
+                    specific_mac = None
+                    
+            if specific_mac and len(specific_mac) == 6:
+                print(f"Netlog: Will look for specific device: {':'.join(f'{b:02x}' for b in specific_mac)} after discovery")
+                print(f"Netlog: IMPORTANT - We'll do discovery first to ensure proper protocol handshake")
+            else:
+                print(f"Warning: Invalid MAC address format for netlog. Using broadcast discovery.")
+        
+        # Start packet capture if not already running
+        if not self.capture_thread or not self.capture_thread.is_alive():
+            self.start_packet_capture()
+        else:
+            if self.debug:
+                print("Packet capture already running")
+            
+        # Start the netlog worker thread
+        self.netlog_active = True
+        
+        def netlog_worker():
+            # Use the exact same constants as in the original netlog.py
+            DISCOVERY_TIMEOUT = 5.0
+            HEARTBEAT_INTERVAL = 0.5
+            
+            if self.debug:
+                print(f"Using constants from original netlog.py: DISCOVERY_TIMEOUT={DISCOVERY_TIMEOUT}s, HEARTBEAT_INTERVAL={HEARTBEAT_INTERVAL}s")
+            
+            if self.debug:
+                print(f"Netlog worker started with signature: {self.netlog_signature.hex()}")
+                print(f"Netlog using interface: {self.ifname}, IP: {self.interface_ip}")
+            
+            # Send initial discovery
+            self.send_netlog_discovery()
+            
+            # For better debug visibility
+            discovery_attempts = 0
+            last_discovery_time = time.time()
+            processed_packets = 0
+            
+            # Initialize heartbeat counter for debugging
+            if not hasattr(self, '_heartbeat_count'):
+                self._heartbeat_count = 0
+            
+            # Main heartbeat loop - now the actual packet processing happens in the capture thread
+            # This better matches the original netlog.py heartbeat_worker
+            while not self.netlog_stop.is_set():
+                if self.debug and self._heartbeat_count % 20 == 0:
+                    print(f"Netlog status: device_discovered={self.netlog_device_discovered}")
+                    if self.netlog_device_discovered and hasattr(self, 'netlog_device_signature'):
+                        print(f"  Device signature: {self.netlog_device_signature.hex()}")
+                    else:
+                        print("  No device selected yet")
+                
+                # The original netlog.py heartbeat_worker only does these two things:
+                # 1. Send heartbeat if a device is discovered
+                # 2. Send discovery if no device is discovered
+                if self.netlog_device_discovered and hasattr(self, 'netlog_device_signature') and self.netlog_device_signature:
+                    # Send heartbeat to keep connection alive
+                    self.send_netlog_heartbeat()
+                    self._heartbeat_count += 1
+                else:
+                    # Send discovery to find devices
+                    self.send_netlog_discovery()
+                    discovery_attempts += 1
+                    
+                    if self.debug and discovery_attempts <= 5:
+                        print(f"Sent netlog discovery attempt #{discovery_attempts}")
+                
+                # Sleep for heartbeat interval
+                time.sleep(HEARTBEAT_INTERVAL)
+                
+                # Debug output every 20 heartbeats
+                if self.debug and self._heartbeat_count > 0 and self._heartbeat_count % 20 == 0:
+                    print(f"Processed {processed_packets} netlog packets so far")
+                    print(f"Device discovered: {self.netlog_device_discovered}")
+                    if hasattr(self, 'netlog_device_signature') and self.netlog_device_signature:
+                        print(f"Device signature: {self.netlog_device_signature.hex()}")
+                    else:
+                        print("Device signature: None")
+                
+            self.netlog_active = False
+            if self.debug:
+                print(f"Netlog worker stopped after processing {processed_packets} packets")
+                
+        self.netlog_thread = threading.Thread(target=netlog_worker, daemon=True)
+        self.netlog_thread.start()
+        return True
+        
+    def stop_netlog(self):
+        if not self.netlog_active:
+            return
+            
+        print("Stopping netlog...")
+        self.netlog_stop.set()
+        
+        # Give the thread a chance to exit gracefully
+        if self.netlog_thread and self.netlog_thread.is_alive():
+            try:
+                self.netlog_thread.join(timeout=2)
+                if self.netlog_thread.is_alive():
+                    if self.debug:
+                        print("Netlog thread did not exit within timeout, continuing anyway")
+            except Exception as e:
+                if self.debug:
+                    print(f"Error stopping netlog thread: {e}")
+        
+        # Reset state
+        self.netlog_active = False
+        self.netlog_device_discovered = False
+        self._heartbeat_count = 0 if hasattr(self, '_heartbeat_count') else 0
+        
+        # Clear any captured packets to avoid processing stale data
+        self.captured_packets = []
+        
+        print("Netlog stopped")
+            
+    def send_netlog_discovery(self):
+        if not self.netlog_signature:
+            self.netlog_signature = os.urandom(6)
+            
+        if self.debug:
+            self.log_netlog("Sending netlog discovery packet...", debug_only=True)
+        
+        # According to protocol specification:
+        # Client sends discovery packet (Type 1):
+        # [0x01][0xFF 0xFF 0xFF 0xFF 0xFF 0xFF][our_signature]
+        #
+        # Type: 1 (discovery request)
+        # Signature: Broadcast (all 0xFF)
+        # Data: Client's 6-byte signature
+        packet = NetlogPacket(
+            pkt_type=NETLOG_PKT_TYPE_DISCOVERY,
+            signature=b"\xff" * 6,  # Broadcast signature
+            data=self.netlog_signature
+        )
+        
+        raw_packet = packet.to_bytes()
+        
+        # EXTRA DEBUG: Print raw packet hex
+        if self.debug:
+            self.log_netlog(f"  Our signature: {self.netlog_signature.hex()}", debug_only=True)
+            self.log_netlog(f"  Raw discovery packet: {raw_packet.hex()}", debug_only=True)
+        
+        # Use L2socket for discovery (broadcast to all devices)
+        try:
+            sock = conf.L2socket(iface=self.ifname)
+            # Use broadcast MAC address for discovery
+            eth_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / IP(src=self.interface_ip, dst="255.255.255.255") / UDP(sport=NETLOG_PORT, dport=NETLOG_PORT) / Raw(raw_packet)
+            sock.send(eth_packet)
+            sock.close()
+            
+            if self.debug:
+                self.log_netlog("Sent discovery packet via L2socket (broadcast MAC)", debug_only=True)
+                
+        except Exception as e:
+            self.log_netlog(f"Error sending discovery via L2socket: {e}", debug_only=True)
+            
+            # Fallback to standard IP/UDP if L2socket fails
+            try:
+                udp_packet = IP(src=self.interface_ip, dst="255.255.255.255") / UDP(sport=NETLOG_PORT, dport=NETLOG_PORT) / Raw(raw_packet)
+                send(udp_packet, verbose=0)
+                
+                if self.debug:
+                    self.log_netlog("Sent discovery packet via IP/UDP fallback", debug_only=True)
+            except Exception as e2:
+                self.log_netlog(f"Error sending discovery via IP/UDP fallback: {e2}", debug_only=True)
+                
+    def send_netlog_heartbeat(self):
+        if not self.netlog_device_discovered or not self.netlog_device_signature:
+            self.log_netlog("Cannot send heartbeat - no device selected or discovered", debug_only=True)
+            if self.debug:
+                self.log_netlog(f"  Device discovered: {self.netlog_device_discovered}", debug_only=True)
+                if hasattr(self, 'netlog_device_signature') and self.netlog_device_signature:
+                    self.log_netlog(f"  Device signature: {self.netlog_device_signature.hex()}", debug_only=True)
+                else:
+                    self.log_netlog("  Device signature: None", debug_only=True)
+            return
+        
+        if not hasattr(self, '_heartbeat_count'):
+            self._heartbeat_count = 0
+        self._heartbeat_count += 1
+        
+        # Log at reasonable intervals
+        should_log = (self._heartbeat_count % 20 == 1) or (self._heartbeat_count <= 5)
+        
+        if self.debug and should_log:
+            self.log_netlog(f"Sending heartbeat #{self._heartbeat_count} to device: {self.netlog_device_signature.hex()}", debug_only=True)
+            self.log_netlog(f"  Our signature: {self.netlog_signature.hex()}", debug_only=True)
+        
+        # According to protocol specification:
+        # Client sends heartbeat (Type 3) every 500ms:
+        # [0x03][device_signature][our_signature]
+        #
+        # Type: 3 (heartbeat)
+        # Signature: Target device's signature
+        # Data: Client's signature
+        packet = NetlogPacket(
+            pkt_type=NETLOG_PKT_TYPE_HEARTBEAT,
+            signature=self.netlog_device_signature,
+            data=self.netlog_signature
+        )
+        
+        raw_packet = packet.to_bytes()
+        
+        # EXTRA DEBUG: Print raw packet hex
+        if self.debug and should_log:
+            self.log_netlog(f"  Raw heartbeat packet: {raw_packet.hex()}", debug_only=True)
+        
+        try:
+            if hasattr(self, 'netlog_device_mac') and self.netlog_device_mac:
+                # Use the specifically saved device MAC (from ARP)
+                dest_mac = self.netlog_device_mac
+                
+                if self.debug and should_log:
+                    self.log_netlog(f"  Using device MAC from ARP: {dest_mac}", debug_only=True)
+                
+                # Use L2socket with explicit destination MAC from ARP
+                sock = conf.L2socket(iface=self.ifname)
+                eth_packet = Ether(dst=dest_mac) / IP(src=self.interface_ip, dst=self.netlog_device_ip) / UDP(sport=NETLOG_PORT, dport=NETLOG_PORT) / Raw(raw_packet)
+                sock.send(eth_packet)
+                sock.close()
+            else:
+                # Format MAC address for Ether layer from device signature
+                dest_mac = ':'.join(f'{b:02x}' for b in self.netlog_device_signature)
+                
+                if self.debug and should_log:
+                    self.log_netlog(f"  Using destination MAC from signature: {dest_mac}", debug_only=True)
+                    if hasattr(self, 'netlog_device_ip'):
+                        self.log_netlog(f"  Using destination IP: {self.netlog_device_ip}", debug_only=True)
+                    else:
+                        self.log_netlog(f"  Using broadcast IP (no specific IP known)", debug_only=True)
+                
+                # Use L2socket with explicit destination MAC
+                sock = conf.L2socket(iface=self.ifname)
+                
+                # If we have a specific IP, use it, otherwise use broadcast
+                if hasattr(self, 'netlog_device_ip') and self.netlog_device_ip:
+                    dst_ip = self.netlog_device_ip
+                else:
+                    dst_ip = "255.255.255.255"
+                    
+                eth_packet = Ether(dst=dest_mac) / IP(src=self.interface_ip, dst=dst_ip) / UDP(sport=NETLOG_PORT, dport=NETLOG_PORT) / Raw(raw_packet)
+                sock.send(eth_packet)
+                sock.close()
+        except Exception as e:
+            self.log_netlog(f"Error sending heartbeat: {e}", debug_only=True)
+            # Try fallback method with just IP/UDP (no Ethernet)
+            try:
+                if hasattr(self, 'netlog_device_ip') and self.netlog_device_ip:
+                    dst_ip = self.netlog_device_ip
+                else:
+                    dst_ip = "255.255.255.255"
+                
+                if self.debug and should_log:
+                    self.log_netlog(f"  Using fallback IP/UDP method to {dst_ip}", debug_only=True)
+                    
+                udp_packet = IP(src=self.interface_ip, dst=dst_ip) / UDP(sport=NETLOG_PORT, dport=NETLOG_PORT) / Raw(raw_packet)
+                send(udp_packet, verbose=0)
+            except Exception as e2:
+                self.log_netlog(f"Error sending heartbeat via fallback method: {e2}", debug_only=True)
+                
+    def process_netlog_packet(self, netlog_pkt, packet):
+        if not packet.haslayer(IP):
+            return
+            
+        src_ip = packet[IP].src
+        
+        # Store source MAC if available (for future direct communication)
+        src_mac = None
+        if packet.haslayer(Ether):
+            src_mac = packet[Ether].src
+            if self.debug:
+                self.log_netlog(f"Received netlog packet from MAC: {src_mac}, IP: {src_ip}", debug_only=True)
+                
+        if self.debug:
+            self.log_netlog(f"Received netlog packet type {netlog_pkt.pkt_type} from {src_ip}", debug_only=True)
+            
+        if netlog_pkt.pkt_type == NETLOG_PKT_TYPE_DISCOVERY_RESP:
+            # Pass source MAC if available for more efficient communication
+            self.handle_netlog_discovery_response(netlog_pkt, src_ip, src_mac)
+        elif netlog_pkt.pkt_type == NETLOG_PKT_TYPE_LOG_DATA:
+            self.handle_netlog_log_data(netlog_pkt)
+            
+    def handle_netlog_discovery_response(self, netlog_pkt, src_ip, src_mac=None):
+        if self.debug:
+            self.log_netlog(f"*** DISCOVERY RESPONSE from {src_ip} ***", debug_only=True)
+        
+        # According to the protocol specification, device discovery response has:
+        # - Type: 2 (discovery response)
+        # - Signature: Device's 6-byte identifier
+        # - Data: Device's 6-byte identifier (repeated)
+        #
+        # So we should consistently get the device signature from the data field
+        if len(netlog_pkt.data) >= 6:
+            device_signature = netlog_pkt.data[:6]
+            if self.debug:
+                print(f"Using device signature from data field: {device_signature.hex()}")
+        else:
+            # Fall back to signature field if data is missing (shouldn't happen)
+            device_signature = netlog_pkt.signature
+            if self.debug:
+                print(f"WARNING: Using device signature from signature field: {device_signature.hex()}")
+                print(f"  This is not per protocol specification and may cause issues!")
+            
+        # Create device info dict matching original netlog.py
+        # Add MAC address if available for more efficient communication
+        device_info = {
+            'signature': device_signature,
+            'ip': src_ip,
+            'id': ':'.join(f'{b:02x}' for b in device_signature),
+            'mac': src_mac  # Store source MAC if available
+        }
+        
+        # Verify MAC from Ethernet frame matches device signature
+        if src_mac and device_info['id'] != src_mac:
+            if self.debug:
+                print(f"Note: Device signature ({device_info['id']}) doesn't match Ethernet source MAC ({src_mac})")
+                print(f"  Using device signature from packet data for protocol compliance")
+        
+        # Check if we already know about this device
+        for existing in self.netlog_discovered_devices:
+            if existing['signature'] == device_signature:
+                if self.debug:
+                    print(f"Device already in discovery list: {device_info['id']}")
+                return
+                
+        # Add to discovered devices list
+        self.netlog_discovered_devices.append(device_info)
+        
+        if self.debug:
+            self.log_netlog(f"Added device to discovery list: {device_info['id']} at {src_ip}", debug_only=True)
+        else:
+            self.log_netlog(f"Discovered netlog device: {device_info['id']} at {src_ip}", debug_only=False)
+            
+        if not self.netlog_device_discovered:
+            # First try: If we have a specific netat device, check if this device matches
+            if self.dest != b'\xff\xff\xff\xff\xff\xff' and device_signature == self.dest:
+                self.netlog_device_signature = device_signature
+                self.netlog_device_discovered = True
+                if self.debug:
+                    self.log_netlog(f"Auto-selected matching device: {':'.join(f'{b:02x}' for b in device_signature)}", debug_only=True)
+                self.log_netlog(f"Selected device: {device_info['id']} at {src_ip}", debug_only=False)
+            # Second try: If this is the only device so far, select it
+            elif len(self.netlog_discovered_devices) == 1:
+                self.netlog_device_signature = device_signature
+                self.netlog_device_discovered = True
+                self.log_netlog(f"Selected device: {device_info['id']} at {src_ip}", debug_only=False)
+                    
+    def handle_netlog_log_data(self, netlog_pkt):
+        if self.debug:
+            self.log_netlog("*** NETLOG DATA RECEIVED ***", debug_only=True)
+        
+        if not self.netlog_device_discovered:
+            self.log_netlog("No device selected yet, ignoring log data", debug_only=True)
+            return
+            
+        # According to protocol specification:
+        # Device sends log data (Type 4):
+        # [0x04][our_signature][device_signature + log_text]
+        #
+        # Type: 4 (log data)
+        # Signature: Client's signature (indicates it's for this client)
+        # Data: Device signature (6 bytes) + UTF-8 log text
+        if netlog_pkt.signature != self.netlog_signature:
+            if self.debug:
+                self.log_netlog("Log data not for us - signature mismatch:", debug_only=True)
+                self.log_netlog(f"  Packet signature: {netlog_pkt.signature.hex()}", debug_only=True)
+                self.log_netlog(f"  Our signature:    {self.netlog_signature.hex()}", debug_only=True)
+            return
+        
+        if self.debug:
+            self.log_netlog("Valid log data packet for us with matching signature!", debug_only=True)
+            
+        try:
+            log_data = netlog_pkt.data
+            
+            if self.debug:
+                self.log_netlog(f"Log data length: {len(log_data)} bytes", debug_only=True)
+                self.log_netlog(f"Log data hex: {log_data.hex() if len(log_data) < 100 else log_data.hex()[:100] + '...'}", debug_only=True)
+            
+            # Following EXACTLY the original netlog.py logic
+            if len(log_data) > 6:  # Skip the device MAC (first 6 bytes)
+                # Extract the device MAC and log text
+                device_mac = log_data[:6]
+                log_text = log_data[6:].decode('utf-8', errors='ignore').strip()
+                
+                if self.debug:
+                    self.log_netlog(f"Device MAC: {':'.join(f'{b:02x}' for b in device_mac)}", debug_only=True)
+                
+                if log_text:
+                    self.log_netlog(log_text, debug_only=False)
+                    
+                    # Additional formatting for our logs
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                    
+                    # Log to file if enabled
+                    if self.log_responses and self.response_logger:
+                        self.response_logger.info(f"NETLOG [{timestamp}]: {log_text}")
+                    
+                    # No need to use the display callback directly here as we're already using log_netlog
+                    # which handles the display callback properly
+                        
+                    # Return the log text so other parts of the code can use it if needed
+                    return log_text
+                else:
+                    self.log_netlog("Log text is empty after decoding and stripping", debug_only=True)
+            else:
+                self.log_netlog(f"Log data too short (need > 6 bytes): {len(log_data)} bytes", debug_only=True)
+                self.log_netlog(f"Raw data: {log_data.hex()}", debug_only=True)
+        except Exception as e:
+            self.log_netlog(f"Error processing log data: {e}", debug_only=True)
+            if hasattr(netlog_pkt, 'data'):
+                self.log_netlog(f"Raw data: {netlog_pkt.data.hex() if len(netlog_pkt.data) < 100 else netlog_pkt.data.hex()[:100] + '...'}", debug_only=True)
+            if self.debug:
+                import traceback
+                self.log_netlog(f"Traceback: {traceback.format_exc()}", debug_only=True)
+                
+        return None
+                
+    def select_netlog_device(self, device_index=None):
+        if not self.netlog_discovered_devices:
+            # Use the log_netlog method for consistent output handling
+            self.log_netlog("No netlog devices discovered", debug_only=True)
+            return False
+            
+        if device_index is not None and 0 <= device_index < len(self.netlog_discovered_devices):
+            device = self.netlog_discovered_devices[device_index]
+            self.netlog_device_signature = device['signature']
+            self.netlog_device_discovered = True
+            
+            # Save device IP for packet handling
+            if 'ip' in device:
+                self.netlog_device_ip = device['ip']
+                
+            # Get MAC from ARP if available
+            try:
+                if 'ip' in device:
+                    ans, _ = arping(device['ip'], verbose=0, timeout=1)
+                    if ans and len(ans) > 0:
+                        # Save MAC for L2 packets
+                        self.netlog_device_mac = ans[0][1].src
+                        # Also add MAC to device info
+                        device['mac'] = self.netlog_device_mac
+            except Exception as e:
+                self.log_netlog(f"Error getting MAC via ARP: {e}", debug_only=True)
+            
+            mac_info = f", MAC: {self.netlog_device_mac}" if hasattr(self, 'netlog_device_mac') else ""
+            self.log_netlog(f"Selected device: {device['id']} at {device['ip']}{mac_info}")
+                
+            # Send a heartbeat immediately to establish connection
+            try:
+                self.send_netlog_heartbeat()
+                self.log_netlog("Sent initial heartbeat to selected device", debug_only=True)
+            except Exception as e:
+                self.log_netlog(f"Error sending initial heartbeat: {e}", debug_only=True)
+                    
+            return True
+            
+        # If no specific index, but only one device, select it
+        if len(self.netlog_discovered_devices) == 1:
+            device = self.netlog_discovered_devices[0]
+            self.netlog_device_signature = device['signature']
+            self.netlog_device_discovered = True
+            
+            # Save device IP for packet handling
+            if 'ip' in device:
+                self.netlog_device_ip = device['ip']
+                
+            # Get MAC from ARP if available
+            try:
+                if 'ip' in device:
+                    ans, _ = arping(device['ip'], verbose=0, timeout=1)
+                    if ans and len(ans) > 0:
+                        # Save MAC for L2 packets
+                        self.netlog_device_mac = ans[0][1].src
+                        # Also add MAC to device info
+                        device['mac'] = self.netlog_device_mac
+            except Exception as e:
+                self.log_netlog(f"Error getting MAC via ARP: {e}", debug_only=True)
+            
+            mac_info = f", MAC: {self.netlog_device_mac}" if hasattr(self, 'netlog_device_mac') else ""
+            self.log_netlog(f"Auto-selected device: {device['id']} at {device['ip']}{mac_info}")
+                
+            # Send a heartbeat immediately to establish connection
+            try:
+                self.send_netlog_heartbeat()
+                self.log_netlog("Sent initial heartbeat to selected device", debug_only=True)
+            except Exception as e:
+                self.log_netlog(f"Error sending initial heartbeat: {e}", debug_only=True)
+                    
+            return True
+            
+        # Multiple devices, display them for selection
+        self.log_netlog(f"Found {len(self.netlog_discovered_devices)} devices:")
+        for i, device in enumerate(self.netlog_discovered_devices):
+            self.log_netlog(f"  {i+1}. {device['id']} at {device['ip']}")
+        
+        # Let interactive mode or CLI handle the actual selection
+        return False
 
     def send_packet(self, data, dest_ip=None, dest_mac=None, unicast=False):
         if unicast and dest_mac is None:
@@ -745,7 +1403,7 @@ class CursesInterface:
             curses.echo()
             curses.endwin()
             
-    def add_output_line(self, text, color_pair=5):
+    def add_output_line(self, text, color_pair=5, is_netlog=False):
         timestamp = datetime.now().strftime("%H:%M:%S")
         
         # Ensure text is a string and handle None
@@ -756,6 +1414,16 @@ class CursesInterface:
         
         # Remove problematic characters
         clean_text = text.replace('\x00', '').replace('\r', '')
+        
+        # For netlog messages, use a different format and add to netlog output section
+        if is_netlog:
+            # Add to the specific netlog output lines list
+            if hasattr(self, 'netlog_output_lines'):
+                self.netlog_output_lines.append((clean_text, color_pair))
+                
+                # Keep only the last 100 lines
+                if len(self.netlog_output_lines) > 100:
+                    self.netlog_output_lines = self.netlog_output_lines[-100:]
         
         # Handle newlines - split into multiple lines instead of replacing with space
         if '\n' in clean_text:
@@ -779,8 +1447,8 @@ class CursesInterface:
             self.output_lines.pop(0)
             
     def get_completions(self, text):
-        base_commands = ["exit", "scan", "device", "deviceinfo", "help", "show_config", "clear", "debug_mode", "production_mode", "debug", "logging", "signalgraph"]
-        arg_commands = ["setmac", "loadconfig", "saveconfig", "signalgraph_interval"]
+        base_commands = ["exit", "scan", "device", "deviceinfo", "help", "show_config", "clear", "debug_mode", "production_mode", "debug", "logging", "signalgraph", "netlog", "stop netlog"]
+        arg_commands = ["setmac", "loadconfig", "saveconfig", "signalgraph_interval", "netlog scan"]
         
         available_set_commands = SET_COMMANDS if self.mgr.debug_mode else PRODUCTION_SET_COMMANDS
         available_get_commands = GET_COMMANDS if self.mgr.debug_mode else PRODUCTION_GET_COMMANDS
@@ -988,7 +1656,7 @@ class CursesInterface:
                 cursor_char = cmd_display[self.cursor_pos] if self.cursor_pos < len(cmd_display) else " "
                 self.stdscr.addstr(prompt_y + 1, cursor_x, cursor_char, curses.color_pair(2) | curses.A_REVERSE)
                 
-        help_text = "TAB: complete | UP/DOWN: history | F1: device select | CTRL+C: exit/cancel | 'debug': toggle debug mode"
+        help_text = "TAB: complete | UP/DOWN: history | F1: device select | F2: netlog scan | CTRL+C: exit/cancel | 'debug': toggle debug mode"
         if self.waiting_for_response:
             help_text = "Waiting for device response... | CTRL+C: cancel"
             
@@ -1029,6 +1697,15 @@ class CursesInterface:
             status_text = "enabled" if status else "disabled"
             log_file = self.mgr.log_file if status else "N/A"
             self.add_output_line(f"Response logging {status_text} (file: {log_file})", 1 if status else 2)
+            return
+        elif cmd == "netlog":
+            self.execute_netlog_command()
+            return
+        elif cmd == "netlog scan":
+            self.execute_netlog_scan()
+            return
+        elif cmd == "stop netlog":
+            self.stop_netlog()
             return
         elif cmd.startswith("signalgraph_interval"):
             try:
@@ -1097,6 +1774,259 @@ class CursesInterface:
                 self.add_output_line(f"Unknown command: {command}", 3)
                 self.add_output_line("Type 'help' for available commands", 4)
                 
+    def execute_netlog_command(self):
+        if self.mgr.netlog_active:
+            self.add_output_line("Netlog already active", 3)
+            self.add_output_line("Type 'stop netlog' to stop", 4)
+            return
+            
+        # Make sure we have a device selected
+        if self.mgr.dest == b'\xff\xff\xff\xff\xff\xff':
+            self.add_output_line("No device selected. Use 'scan' to find devices first or 'netlog scan'", 3)
+            return
+            
+        device_mac = ':'.join(f'{b:02x}' for b in self.mgr.dest)
+        self.add_output_line(f"Starting netlog with current device: {device_mac}", 4)
+        
+        # Set up split display for netlog
+        self.setup_netlog_display()
+        
+        if hasattr(self.mgr, 'netlog_thread') and self.mgr.netlog_thread and self.mgr.netlog_thread.is_alive():
+            self.add_output_line("Stopping previous netlog session first...", 4)
+            self.mgr.stop_netlog()
+            time.sleep(0.5)  # Brief pause
+        
+        self.add_output_line("Sending initial discovery to ensure proper connection...", 4)
+        
+        # Ensure we start with a clean slate
+        self.mgr.netlog_discovered_devices = []
+        self.mgr.netlog_device_discovered = False
+        if hasattr(self.mgr, 'netlog_device_signature'):
+            delattr(self.mgr, 'netlog_device_signature')
+        
+        # Start netlog without any specific device (ONLY for discovery)
+        self.add_output_line("Starting discovery phase...", 4)
+        success = self.mgr.start_netlog()
+        
+        if success:
+            # Wait for discovery responses
+            self.start_wait_feedback("Waiting for device response", 3)
+            time.sleep(3)  # Wait for discovery responses
+            self.stop_wait_feedback()
+            
+            # Debug output
+            self.add_output_line(f"Discovery complete. Found {len(self.mgr.netlog_discovered_devices)} devices", 4)
+            
+            # Check if our device was discovered
+            device_found = False
+            for device in self.mgr.netlog_discovered_devices:
+                device_id = ':'.join(f'{b:02x}' for b in device['signature'])
+                self.add_output_line(f"  Device: {device_id} at {device['ip']}", 4)
+                
+                if device['signature'] == self.mgr.dest:
+                    device_found = True
+                    self.add_output_line(f"Found our selected device: {device_id} at {device['ip']}", 1)
+                    
+                    # Explicitly select this device for netlog
+                    device_idx = self.mgr.netlog_discovered_devices.index(device)
+                    self.mgr.select_netlog_device(device_idx)
+                    
+                    # Double-check that the device was actually selected
+                    if self.mgr.netlog_device_discovered and hasattr(self.mgr, 'netlog_device_signature'):
+                        self.add_output_line(f"Device successfully selected for netlog", 1)
+                    else:
+                        self.add_output_line(f"ERROR: Failed to select device", 3)
+                        
+                    break
+            
+            if not device_found:
+                self.add_output_line("Device did not respond to netlog discovery", 3)
+                self.add_output_line("Try 'netlog scan' instead to find available devices", 4)
+                self.mgr.stop_netlog()
+                return
+                
+            # If we got this far, the device was found and selected
+            self.add_output_line("Netlog active - waiting for log messages...", 1)
+            self.set_status("Netlog active - Press F2 or 'stop netlog' to stop", 1, 0)
+        else:
+            self.add_output_line("Failed to start netlog", 3)
+            
+    def setup_netlog_display(self):
+        # Create a special section in the output area for netlog messages
+        self.netlog_output_lines = []
+        
+        # Add a separator to indicate netlog output section
+        self.add_output_line("", 0)
+        self.add_output_line("=== NETLOG OUTPUT ===", 1)
+        self.add_output_line("Waiting for log messages...", 4)
+        
+        # Save the current output line index so we can append netlog messages here
+        self.netlog_output_start = len(self.output_lines) - 1
+        
+        # Set up a callback function to add log messages to the display
+        if not hasattr(self.mgr, 'netlog_display_callback'):
+            def log_display_callback(log_text):
+                # Add the log message to our display
+                self.add_output_line(log_text, 0, is_netlog=True)
+                self.draw_screen()  # Update the display immediately
+                
+            # Set the callback in the manager
+            self.mgr.netlog_display_callback = log_display_callback
+            
+    def execute_netlog_scan(self):
+        if self.mgr.netlog_active:
+            self.stop_netlog()
+            
+        self.add_output_line("Scanning for netlog devices...", 4)
+        self.set_status("Scanning for netlog devices", 4, 3)
+        
+        self.start_wait_feedback("Scanning for netlog devices", 5)
+        
+        # Start netlog without specific device
+        success = self.mgr.start_netlog()
+        if not success:
+            self.add_output_line("Failed to start netlog scan", 3)
+            self.stop_wait_feedback()
+            return
+            
+        # Wait for discovery to complete
+        discovery_time = 5  # seconds
+        self.add_output_line(f"Waiting {discovery_time}s for discovery responses...", 4)
+        
+        # Sleep with UI updates
+        start_time = time.time()
+        while time.time() - start_time < discovery_time and not self.operation_cancelled:
+            # Keep UI responsive
+            self.stdscr.timeout(50)
+            try:
+                key = self.stdscr.getch()
+                if key == 3:  # CTRL+C
+                    self.operation_cancelled = True
+                    break
+            except:
+                pass
+                
+            # Update screen
+            self.draw_screen()
+            time.sleep(0.1)
+            
+        # Check if we found devices
+        if self.mgr.netlog_discovered_devices:
+            self.add_output_line(f"Found {len(self.mgr.netlog_discovered_devices)} netlog device(s):", 1)
+            for idx, device in enumerate(self.mgr.netlog_discovered_devices):
+                self.add_output_line(f"  {idx+1}. {device['id']} at {device['ip']}", 4)
+                
+            # Show netlog device selection popup
+            self.show_netlog_device_selection()
+        else:
+            self.add_output_line("No netlog devices found", 3)
+            self.mgr.stop_netlog()
+            
+        self.stop_wait_feedback()
+        
+    def show_netlog_device_selection(self):
+        if not self.mgr.netlog_discovered_devices:
+            self.add_output_line("No netlog devices found", 3)
+            return
+            
+        # Save current state
+        curses.curs_set(0)  # Hide cursor
+        
+        # Calculate window dimensions
+        height, width = self.stdscr.getmaxyx()
+        win_height = min(len(self.mgr.netlog_discovered_devices) + 4, height - 4)
+        win_width = min(60, width - 4)
+        win_y = (height - win_height) // 2
+        win_x = (width - win_width) // 2
+        
+        # Create window
+        win = curses.newwin(win_height, win_width, win_y, win_x)
+        win.keypad(True)
+        win.box()
+        
+        # Add title
+        title = " Netlog Device Selection "
+        win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(1) | curses.A_BOLD)
+        
+        # Add instructions
+        instructions = "↑/↓: Navigate | Enter: Select | Esc: Cancel"
+        win.addstr(win_height - 1, 1, instructions, curses.color_pair(4))
+        
+        # Initialize selection
+        selected = 0
+        offset = 0
+        max_devices = win_height - 4  # Account for border, title, and instructions
+        
+        # Check if current netat device is in the list and preselect it
+        current_mac = self.mgr.dest
+        for idx, device in enumerate(self.mgr.netlog_discovered_devices):
+            if device['signature'] == current_mac:
+                selected = idx
+                break
+                
+        # Event loop for device selection
+        while True:
+            # Display devices
+            for i in range(min(max_devices, len(self.mgr.netlog_discovered_devices))):
+                idx = i + offset
+                if idx < len(self.mgr.netlog_discovered_devices):
+                    device = self.mgr.netlog_discovered_devices[idx]
+                    device_info = f"{device['id']} at {device['ip']}"
+                    
+                    # Highlight selected device
+                    if idx == selected:
+                        win.addstr(i + 2, 1, f"> {device_info}", curses.color_pair(1) | curses.A_REVERSE)
+                    else:
+                        win.addstr(i + 2, 1, f"  {device_info}", curses.color_pair(5))
+            
+            win.refresh()
+            
+            # Handle key press
+            key = win.getch()
+            
+            if key == curses.KEY_UP:
+                if selected > 0:
+                    selected -= 1
+                    if selected < offset:
+                        offset = selected
+            elif key == curses.KEY_DOWN:
+                if selected < len(self.mgr.netlog_discovered_devices) - 1:
+                    selected += 1
+                    if selected >= offset + max_devices:
+                        offset = selected - max_devices + 1
+            elif key == 27:  # ESC
+                # Cancel selection
+                self.mgr.stop_netlog()
+                self.add_output_line("Netlog device selection cancelled", 2)
+                break
+            elif key == 10 or key == 13:  # Enter
+                # Select device
+                if selected < len(self.mgr.netlog_discovered_devices):
+                    self.mgr.select_netlog_device(selected)
+                    device = self.mgr.netlog_discovered_devices[selected]
+                    self.add_output_line(f"Selected netlog device: {device['id']} at {device['ip']}", 1)
+                    
+                    # Set up split display
+                    self.setup_netlog_display()
+                    
+                    # Continue netlog
+                    self.add_output_line("Netlog active - waiting for log messages...", 1)
+                    self.set_status("Netlog active - F2 or 'stop netlog' to stop", 1, 0)
+                break
+                
+        # Clean up
+        del win
+        self.draw_screen()
+        
+    def stop_netlog(self):
+        if not self.mgr.netlog_active:
+            self.add_output_line("Netlog is not active", 3)
+            return
+            
+        self.mgr.stop_netlog()
+        self.add_output_line("Netlog stopped", 2)
+        self.set_status("Netlog stopped", 2, 3)
+        
     def execute_scan_command(self):
         self.add_output_line("Starting device scan...", 4)
         self.set_status("Initiating device scan", 4, 3)
@@ -2021,6 +2951,7 @@ class CursesInterface:
             
     def show_help(self):
         debug_status = "ENABLED" if self.mgr.debug_mode else "DISABLED"
+        netlog_status = "ACTIVE" if self.mgr.netlog_active else "INACTIVE"
         help_text = [
             "=== ncurses GUI Commands ===",
             "exit                    - Exit the program",
@@ -2038,6 +2969,12 @@ class CursesInterface:
             "signalgraph_interval <s> - Set graph refresh interval",
             "production_mode         - Disable debug commands",
             "help                    - Show this help",
+            "",
+            "=== Netlog Commands ===",
+            f"netlog                  - Start device logs (currently {netlog_status})",
+            "netlog scan             - Scan for netlog devices",
+            "stop netlog             - Stop receiving device logs",
+            "F2 key                  - Scan for netlog devices",
             "",
             "=== Visual Indicators ===",
             "Animated spinner        - Operation in progress",
@@ -2093,6 +3030,21 @@ class CursesInterface:
                         # F1 key for device selection
                         self.show_device_selection_window()
                         self.draw_screen()  # Redraw screen after closing popup
+                    elif key == curses.KEY_F2:
+                        # F2 key should toggle netlog on/off
+                        if self.mgr.netlog_active:
+                            # If netlog is active, stop it
+                            self.stop_netlog()
+                            self.add_output_line("Netlog stopped", 1)
+                        else:
+                            # If we have a device selected, start netlog with that device
+                            if self.mgr.dest != b'\xff\xff\xff\xff\xff\xff':
+                                self.execute_netlog_command()
+                            else:
+                                # If no device is selected, do a netlog scan
+                                self.execute_netlog_scan()
+                        
+                        self.draw_screen()  # Redraw screen after action
                     elif key == curses.KEY_UP:
                         if self.history and self.history_pos > 0:
                             self.history_pos -= 1
@@ -2430,6 +3382,10 @@ def print_help():
     print("  debug                   - Toggle debug mode (enables debug commands)")
     print("  production_mode         - Disable debug commands")
     print("  help                    - Show this help message")
+    print("\nNETLOG COMMANDS:")
+    print("  netlog                  - Start receiving device logs (uses current device MAC)")
+    print("  netlog scan             - Scan for netlog devices and select one")
+    print("  stop netlog             - Stop receiving device logs")
     
     print("\nUPDATE COMMANDS:")
     print("  --check-update          - Check for updates")
@@ -2695,6 +3651,99 @@ def main(ifname, command=None, dest_mac=None, debug=False, scan_timeout=3, respo
                             print(f"Error saving config: {e}")
                     elif input_cmd.lower() == "help":
                         print_help()
+                    elif input_cmd.lower() == "netlog" or input_cmd.lower().startswith("netlog "):
+                        if mgr.netlog_active:
+                            print("Netlog is already active")
+                            print("Type 'stop netlog' to stop")
+                            continue
+                            
+                        if input_cmd.lower() == "netlog scan":
+                            # Scan for netlog devices
+                            print("Scanning for netlog devices...")
+                            mgr.start_netlog()
+                            
+                            # Wait for discovery to complete
+                            discovery_time = 5  # seconds
+                            print(f"Waiting {discovery_time}s for discovery responses...")
+                            time.sleep(discovery_time)
+                            
+                            # Check if we found devices
+                            if mgr.netlog_discovered_devices:
+                                print(f"\nFound {len(mgr.netlog_discovered_devices)} netlog device(s):")
+                                for idx, device in enumerate(mgr.netlog_discovered_devices):
+                                    print(f"  {idx+1}. {device['id']} at {device['ip']}")
+                                
+                                # Let user select device if multiple
+                                if len(mgr.netlog_discovered_devices) > 1:
+                                    try:
+                                        while True:
+                                            choice = input(f"Select device (1-{len(mgr.netlog_discovered_devices)}): ").strip()
+                                            try:
+                                                idx = int(choice) - 1
+                                                if 0 <= idx < len(mgr.netlog_discovered_devices):
+                                                    mgr.select_netlog_device(idx)
+                                                    device = mgr.netlog_discovered_devices[idx]
+                                                    print(f"Selected device: {device['id']} at {device['ip']}")
+                                                    break
+                                                else:
+                                                    print("Invalid selection. Try again.")
+                                            except ValueError:
+                                                print("Invalid input. Try again.")
+                                    except KeyboardInterrupt:
+                                        print("\nCancelled device selection")
+                                        mgr.stop_netlog()
+                                        continue
+                                else:
+                                    # Auto-select the only device
+                                    mgr.select_netlog_device(0)
+                                    device = mgr.netlog_discovered_devices[0]
+                                    print(f"Selected the only available device: {device['id']} at {device['ip']}")
+                                
+                                print("\nNetlog active - waiting for log messages...")
+                                print("Press Ctrl+C or type 'stop netlog' to stop")
+                            else:
+                                print("No netlog devices found")
+                                mgr.stop_netlog()
+                        else:
+                            # Start netlog with current device
+                            if mgr.dest == b'\xff\xff\xff\xff\xff\xff':
+                                print("No device selected. Use 'scan' to find devices first or 'netlog scan'")
+                                continue
+                                
+                            device_mac = ':'.join(f'{b:02x}' for b in mgr.dest)
+                            print(f"Starting netlog with current device: {device_mac}")
+                            
+                            print("Sending initial discovery...")
+                            
+                            # Start netlog without specifying device first (will do discovery)
+                            mgr.start_netlog()
+                            
+                            # Wait briefly for discovery responses
+                            print("Waiting for device response...")
+                            time.sleep(3)  # Short wait for discovery responses
+                            
+                            # Check if our device was discovered
+                            device_found = False
+                            for device in mgr.netlog_discovered_devices:
+                                if device['signature'] == mgr.dest:
+                                    device_found = True
+                                    print(f"Found device: {device['id']} at {device['ip']}")
+                                    break
+                            
+                            if not device_found:
+                                print("Device did not respond to netlog discovery")
+                                print("Try 'netlog scan' instead to find available devices")
+                                mgr.stop_netlog()
+                                continue
+                            
+                            print("\nNetlog active - waiting for log messages...")
+                            print("Press Ctrl+C or type 'stop netlog' to stop")
+                    elif input_cmd.lower() == "stop netlog":
+                        if not mgr.netlog_active:
+                            print("Netlog is not active")
+                        else:
+                            mgr.stop_netlog()
+                            print("Netlog stopped")
                     elif input_cmd.lower().startswith("at"):
                         print(f"Sending: {input_cmd}")
                         mgr.start_packet_capture()
