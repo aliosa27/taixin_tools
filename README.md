@@ -27,6 +27,7 @@ The Taixin LibNetat Tool v2.0 is a cross-platform network analysis and AT comman
 - **Interface Management**: Automatic or manual network interface selection
 - **Packet Capture**: Real-time packet monitoring with Scapy
 - **Timeout Management**: Configurable scan and response timeouts
+- **Dual Protocol Support**: [NetAT](docs/netat_protocol.md) for device configuration and [NetLog](docs/netlog_protocol.md) for log reception
 
 ## Installation
 
@@ -173,6 +174,36 @@ Query commands for retrieving device status:
 ### Debug Commands
 Advanced debugging and testing commands available in debug mode.
 
+### 2.x Firmware AT Commands
+The tool now supports the new 2.x firmware AT commands, including:
+
+#### Basic Networking
+- `wifimode` - Set working mode (ap/sta/apsta/wnbap/wnbsta)
+- `ssid`, `encrypt`, `key` - Configure connection settings
+- `pair`, `chan_list`, `bss_bw` - Network establishment
+
+#### Advanced Networking
+- `txpower` - Set maximum transmit power
+- `acktmo` - Set ACK timeout for long-distance communication
+- `unpair`, `aphide`, `scan`, `channel` - Network management
+
+#### Debug and System
+- `syscfg`, `fwupg`, `loaddef`, `sysdbg` - System configuration
+- `rst`, `jtag`, `tx_pwr_super`, `version` - Hardware control
+
+#### Hibernation and Power
+- `dsleep`, `wakeup` - Power management features
+
+#### Relay and Roaming
+- `r_ssid`, `r_key` - Relay network configuration
+- `roam` - Roaming network capabilities
+
+#### Network Testing
+- `iperf2`, `ping` - Network performance testing
+- `test_start`, `lo_freq`, `tx_start`, `tx_mcs` - RF testing
+
+For a complete reference, see [AT Commands 2.x Firmware Documentation](docs/at_commands_2x_firmware.md)
+
 ## Configuration Files
 
 ### Device Configuration Format
@@ -272,6 +303,11 @@ python3 libnetat.py eth0 --log-responses --log-file device_responses.log --comma
 - Debug logs may contain network traffic details - review before sharing
 
 ## Version History
+
+### v2.0.2 Features
+- Added support for 2.x firmware AT commands
+- Added comprehensive AT command documentation
+- Enhanced netlog protocol support for both CLI and enhanced UI modes
 
 ### v2.0 Features
 - Enhanced multiplatform support (Windows, macOS, Linux)
