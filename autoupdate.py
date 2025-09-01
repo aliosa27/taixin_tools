@@ -22,7 +22,7 @@ GITHUB_RELEASES_URL = f"{GITHUB_API_URL}/releases/latest"
 USER_AGENT = "Taixin-LibNetat-Tool-Updater/1.0"
 
 # Current version
-__version__ = "2.0.2"
+__version__ = "2.0.4"
 
 # Configure logging
 logging.basicConfig(
