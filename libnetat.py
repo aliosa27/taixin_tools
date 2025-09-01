@@ -13,7 +13,12 @@ import threading
 from datetime import datetime
 
 # Version information
-__version__ = "2.0.4"  
+VERSION_FILE = os.path.join(os.path.dirname(__file__), ".version")
+try:
+    with open(VERSION_FILE, "r") as vf:
+        __version__ = vf.read().strip()
+except Exception:
+    __version__ = "0.0.0"
 
 # Try to import autoupdate module
 try:
