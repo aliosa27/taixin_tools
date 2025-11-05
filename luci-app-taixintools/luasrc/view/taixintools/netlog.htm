@@ -1,0 +1,455 @@
+<%+header%>
+
+<style>
+    /* OpenWrt Bootstrap Dark Theme - Matches NetAT page */
+    .taixintools-container {
+        max-width: 100%;
+        padding: 0;
+    }
+
+    .output-terminal {
+        background: #1a1a1a;
+        color: #e0e0e0;
+        padding: 12px;
+        border-radius: 3px;
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        font-size: 12px;
+        height: 600px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        border: 1px solid #3a3a3a;
+    }
+
+    .output-terminal.active {
+        border-color: #5cb85c;
+        box-shadow: 0 0 5px rgba(92, 184, 92, 0.3);
+    }
+
+    .device-item {
+        padding: 8px 12px;
+        margin: 4px 0;
+        background: #2d2d2d;
+        border: 1px solid #3a3a3a;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s;
+        color: #e0e0e0;
+    }
+
+    .device-item:hover {
+        background: #3a3a3a;
+        border-color: #4a4a4a;
+    }
+
+    .device-item.selected {
+        background: #337ab7;
+        border-color: #2e6da4;
+        color: white;
+        font-weight: bold;
+    }
+
+    .device-list-container {
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid #3a3a3a;
+        border-radius: 3px;
+        padding: 8px;
+        background: #2d2d2d;
+    }
+
+    .no-devices {
+        color: #999;
+        font-style: italic;
+        text-align: center;
+        padding: 20px;
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+
+    .status-success {
+        background: #5cb85c;
+        color: white;
+    }
+
+    .status-warning {
+        background: #f0ad4e;
+        color: white;
+    }
+
+    .status-danger {
+        background: #d9534f;
+        color: white;
+    }
+
+    .alert-warning-custom {
+        background: #fcf8e3;
+        border: 1px solid #f0ad4e;
+        color: #8a6d3b;
+        padding: 10px;
+        border-radius: 3px;
+        margin-bottom: 15px;
+    }
+
+    .panel-title-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    /* Consistent button sizing */
+    .cbi-button {
+        min-width: 120px;
+        height: 32px;
+        padding: 6px 12px;
+        line-height: normal;
+        display: inline-block;
+    }
+</style>
+
+<div class="taixintools-container">
+    <div class="cbi-map">
+        <h2>NetLog Viewer</h2>
+
+        <!-- Interface Selection -->
+        <fieldset class="cbi-section">
+            <legend>Network Interface</legend>
+            <div class="cbi-section-node">
+                <div class="cbi-value">
+                    <label class="cbi-value-title">Interface</label>
+                    <div class="cbi-value-field">
+                        <select id="interface-select" class="cbi-input-select">
+                            <option value="">Loading...</option>
+                        </select>
+                        <span id="interface-status" class="status-badge"></span>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+
+        <!-- Device Selection -->
+        <fieldset class="cbi-section">
+            <legend>Device Selection</legend>
+            <div class="cbi-section-node">
+                <div id="device-warning" class="alert-warning-custom">
+                    <strong>⚠ Required:</strong> Scan and select a device to start NetLog
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <button class="btn cbi-button cbi-button-action" id="scan-btn" onclick="scanDevices()">Scan for Devices</button>
+                        <span id="scan-status"></span>
+                    </div>
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <div id="device-list" class="device-list-container">
+                            <div class="no-devices">Click "Scan for Devices" to find NetAT devices</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+
+        <!-- NetLog Control & Viewer -->
+        <fieldset class="cbi-section">
+            <legend>Live NetLog Viewer</legend>
+            <div class="cbi-section-node">
+                <div class="panel-title-bar">
+                    <div>
+                        <button class="btn cbi-button cbi-button-positive" id="start-netlog-btn" onclick="startNetlog()" disabled>Start NetLog</button>
+                        <button class="btn cbi-button cbi-button-negative" id="stop-netlog-btn" onclick="stopNetlog()" disabled>Stop NetLog</button>
+                        <button class="btn cbi-button" onclick="clearNetlog()">Clear Display</button>
+                        <span id="netlog-status" class="status-badge status-danger">Stopped</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <label style="font-size: 12px; margin: 0;">
+                            <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+                        </label>
+                        <span id="log-count" style="font-size: 12px;">0 lines</span>
+                    </div>
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <div id="netlog-viewer" class="output-terminal">
+Waiting to start NetLog...
+
+Instructions:
+1. Select the network interface above
+2. Scan for devices and select one
+3. Click "Start NetLog" to begin capturing
+4. Logs will appear here in real-time
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+    </div>
+</div>
+
+<script>
+    let currentInterface = null;
+    let selectedDevice = null;
+    let netlogActive = false;
+    let pollInterval = null;
+    let logLineCount = 0;
+    let lastLogContent = '';
+
+    window.addEventListener('DOMContentLoaded', function() {
+        loadInterfaces();
+    });
+
+    function loadInterfaces() {
+        fetch('<%=url("admin/network/taixintools/get_interfaces")%>')
+            .then(response => response.json())
+            .then(data => {
+                const select = document.getElementById('interface-select');
+                select.innerHTML = '';
+
+                data.interfaces.forEach(iface => {
+                    const option = document.createElement('option');
+                    option.value = iface;
+                    option.textContent = iface;
+                    select.appendChild(option);
+                });
+
+                if (data.default_interface) {
+                    select.value = data.default_interface;
+                    currentInterface = data.default_interface;
+                    updateInterfaceStatus(data.has_hg0);
+                } else if (data.interfaces.length > 0) {
+                    currentInterface = data.interfaces[0];
+                    select.value = currentInterface;
+                    updateInterfaceStatus(false);
+                }
+
+                select.addEventListener('change', function() {
+                    currentInterface = this.value;
+                    updateInterfaceStatus(this.value === 'hg0');
+                    clearDeviceList();
+                });
+            });
+    }
+
+    function updateInterfaceStatus(isHg0) {
+        const status = document.getElementById('interface-status');
+        status.className = 'status-badge ' + (isHg0 ? 'status-success' : 'status-warning');
+        status.textContent = isHg0 ? 'hg0 detected' : 'Manual';
+    }
+
+    function clearDeviceList() {
+        selectedDevice = null;
+        document.getElementById('device-list').innerHTML = '<div class="no-devices">Click "Scan for Devices"</div>';
+        document.getElementById('start-netlog-btn').disabled = true;
+        document.getElementById('device-warning').style.display = 'block';
+    }
+
+    function scanDevices() {
+        if (!currentInterface) {
+            alert('Please select an interface first');
+            return;
+        }
+
+        const btn = document.getElementById('scan-btn');
+        const status = document.getElementById('scan-status');
+        btn.disabled = true;
+        btn.textContent = 'Scanning...';
+
+        const formData = new FormData();
+        formData.append('interface', currentInterface);
+
+        fetch('<%=url("admin/network/taixintools/scan_devices")%>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.devices && data.devices.length > 0) {
+                displayDevices(data.devices);
+                status.textContent = 'Found ' + data.devices.length;
+            } else {
+                clearDeviceList();
+                status.textContent = 'No devices found';
+            }
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.textContent = 'Scan for Devices';
+        });
+    }
+
+    function displayDevices(devices) {
+        const deviceList = document.getElementById('device-list');
+        deviceList.innerHTML = '';
+
+        devices.forEach(mac => {
+            const item = document.createElement('div');
+            item.className = 'device-item';
+            item.textContent = mac;
+            item.onclick = function() { selectDevice(mac, item); };
+            deviceList.appendChild(item);
+        });
+
+        if (devices.length > 0) {
+            selectDevice(devices[0], deviceList.firstChild);
+        }
+    }
+
+    function selectDevice(mac, element) {
+        document.querySelectorAll('.device-item').forEach(item => {
+            item.classList.remove('selected');
+        });
+
+        element.classList.add('selected');
+        selectedDevice = mac;
+        document.getElementById('start-netlog-btn').disabled = false;
+        document.getElementById('device-warning').style.display = 'none';
+
+        appendNetlog('Selected device: ' + mac);
+    }
+
+    function startNetlog() {
+        if (!selectedDevice || !currentInterface) {
+            alert('Please scan and select a device first');
+            return;
+        }
+
+        const btn = document.getElementById('start-netlog-btn');
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+
+        const formData = new FormData();
+        formData.append('interface', currentInterface);
+        formData.append('device', selectedDevice);
+
+        fetch('<%=url("admin/network/taixintools/start_netlog")%>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                netlogActive = true;
+                updateNetlogStatus(true);
+                document.getElementById('stop-netlog-btn').disabled = false;
+                appendNetlog('NetLog started for: ' + selectedDevice);
+                startPolling();
+            } else {
+                appendNetlog('✗ Failed to start: ' + (data.error || data.output));
+                btn.disabled = false;
+            }
+        })
+        .finally(() => {
+            btn.textContent = 'Start NetLog';
+        });
+    }
+
+    function stopNetlog() {
+        const btn = document.getElementById('stop-netlog-btn');
+        btn.disabled = true;
+
+        fetch('<%=url("admin/network/taixintools/stop_netlog")%>', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            netlogActive = false;
+            updateNetlogStatus(false);
+            stopPolling();
+            document.getElementById('start-netlog-btn').disabled = false;
+            appendNetlog('NetLog stopped');
+        })
+        .finally(() => {
+            btn.disabled = true;
+        });
+    }
+
+    function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(fetchLogs, 1000);
+        fetchLogs();
+    }
+
+    function stopPolling() {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    }
+
+    function fetchLogs() {
+        if (!netlogActive) return;
+
+        fetch('<%=url("admin/network/taixintools/get_netlog")%>')
+            .then(response => response.json())
+            .then(data => {
+                if (data.logs && data.logs !== lastLogContent) {
+                    const viewer = document.getElementById('netlog-viewer');
+                    if (viewer.textContent.includes('Waiting to start')) {
+                        viewer.textContent = '';
+                    }
+                    viewer.textContent = data.logs;
+                    logLineCount = data.logs.split('\n').length;
+                    document.getElementById('log-count').textContent = logLineCount + ' lines';
+                    lastLogContent = data.logs;
+
+                    if (document.getElementById('auto-scroll').checked) {
+                        viewer.scrollTop = viewer.scrollHeight;
+                    }
+                }
+            });
+    }
+
+    function clearNetlog() {
+        document.getElementById('netlog-viewer').textContent = '';
+        logLineCount = 0;
+        lastLogContent = '';
+        document.getElementById('log-count').textContent = '0 lines';
+    }
+
+    function appendNetlog(text) {
+        const viewer = document.getElementById('netlog-viewer');
+        if (viewer.textContent.includes('Waiting to start')) {
+            viewer.textContent = '';
+        }
+        const timestamp = new Date().toLocaleTimeString();
+        viewer.textContent += '[' + timestamp + '] ' + text + '\n';
+        logLineCount++;
+        document.getElementById('log-count').textContent = logLineCount + ' lines';
+
+        if (document.getElementById('auto-scroll').checked) {
+            viewer.scrollTop = viewer.scrollHeight;
+        }
+    }
+
+    function updateNetlogStatus(active) {
+        const status = document.getElementById('netlog-status');
+        const viewer = document.getElementById('netlog-viewer');
+
+        if (active) {
+            status.className = 'status-badge status-success';
+            status.textContent = 'Running';
+            viewer.classList.add('active');
+        } else {
+            status.className = 'status-badge status-danger';
+            status.textContent = 'Stopped';
+            viewer.classList.remove('active');
+        }
+    }
+
+    window.addEventListener('beforeunload', function() {
+        if (netlogActive) stopPolling();
+    });
+</script>
+
+<%+footer%>

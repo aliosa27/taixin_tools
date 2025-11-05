@@ -1,0 +1,1236 @@
+<%+header%>
+
+<style>
+    /* OpenWrt Bootstrap Dark Theme Overrides */
+    .taixintools-container {
+        max-width: 100%;
+        padding: 0;
+    }
+
+    .output-terminal {
+        background: #1a1a1a;
+        color: #e0e0e0;
+        padding: 12px;
+        border-radius: 3px;
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        font-size: 12px;
+        height: 450px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        border: 1px solid #3a3a3a;
+    }
+
+    .netlog-terminal {
+        height: 450px;
+    }
+
+    .netlog-terminal.active {
+        border-color: #5cb85c;
+        box-shadow: 0 0 5px rgba(92, 184, 92, 0.3);
+    }
+
+    .device-item {
+        padding: 8px 12px;
+        margin: 4px 0;
+        background: #2d2d2d;
+        border: 1px solid #3a3a3a;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s;
+        color: #e0e0e0;
+    }
+
+    .device-item:hover {
+        background: #3a3a3a;
+        border-color: #4a4a4a;
+    }
+
+    .device-item.selected {
+        background: #337ab7;
+        border-color: #2e6da4;
+        color: white;
+        font-weight: bold;
+    }
+
+    .device-list-container {
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid #3a3a3a;
+        border-radius: 3px;
+        padding: 8px;
+        background: #2d2d2d;
+    }
+
+    .no-devices {
+        color: #999;
+        font-style: italic;
+        text-align: center;
+        padding: 20px;
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+
+    .status-success {
+        background: #5cb85c;
+        color: white;
+    }
+
+    .status-warning {
+        background: #f0ad4e;
+        color: white;
+    }
+
+    .status-danger {
+        background: #d9534f;
+        color: white;
+    }
+
+    .status-info {
+        background: #5bc0de;
+        color: white;
+    }
+
+    .status-pairing {
+        background: #f0ad4e;
+        color: white;
+        animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
+    .command-history-btn {
+        padding: 4px 10px;
+        font-size: 11px;
+        margin: 2px;
+    }
+
+    /* Consistent button sizing */
+    .cbi-button {
+        min-width: 120px;
+        height: 32px;
+        padding: 6px 12px;
+        line-height: normal;
+        display: inline-block;
+    }
+
+    .cbi-button-small {
+        min-width: 80px;
+        height: 28px;
+        padding: 4px 10px;
+        line-height: normal;
+        display: inline-block;
+    }
+
+    .split-view {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+        margin-top: 15px;
+    }
+
+    @media (max-width: 992px) {
+        .split-view {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .panel-title-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+
+    .quick-cmd-group {
+        margin-bottom: 10px;
+    }
+
+    .alert-warning-custom {
+        background: #fcf8e3;
+        border: 1px solid #f0ad4e;
+        color: #8a6d3b;
+        padding: 10px;
+        border-radius: 3px;
+        margin-bottom: 15px;
+    }
+</style>
+
+<div class="taixintools-container">
+    <!-- Interface & Device Selection -->
+    <div class="cbi-map">
+        <h2>TaixinTools - NetAT Control Panel</h2>
+
+        <!-- Interface Selection -->
+        <fieldset class="cbi-section">
+            <legend>Network Interface</legend>
+            <div class="cbi-section-node">
+                <div class="cbi-value">
+                    <label class="cbi-value-title">Interface</label>
+                    <div class="cbi-value-field">
+                        <select id="interface-select" class="cbi-input-select">
+                            <option value="">Loading...</option>
+                        </select>
+                        <span id="interface-status" class="status-badge"></span>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+
+        <!-- Device Selection -->
+        <fieldset class="cbi-section">
+            <legend>Device Selection</legend>
+            <div class="cbi-section-node">
+                <div id="device-warning" class="alert-warning-custom">
+                    <strong>⚠ Required:</strong> Scan and select a device to enable all features
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <button class="btn cbi-button cbi-button-action" id="scan-btn" onclick="scanDevices()">Scan for Devices</button>
+                        <button class="btn cbi-button cbi-button-apply" id="pair-btn" onclick="startPairing()" disabled>Quick Pair (Station Mode)</button>
+                        <span id="scan-status"></span>
+                        <span id="pair-status" class="status-badge" style="display:none;"></span>
+                    </div>
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <div id="device-list" class="device-list-container">
+                            <div class="no-devices">Click "Scan for Devices" to find NetAT devices</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+
+        <!-- Quick Setup -->
+        <fieldset class="cbi-section" style="border: 2px solid #337ab7;">
+            <legend>⚡ Quick Setup</legend>
+            <div class="cbi-section-node">
+                <div class="cbi-value">
+                    <label class="cbi-value-title">Firmware Version</label>
+                    <div class="cbi-value-field">
+                        <select id="firmware-version" class="cbi-input-select" onchange="toggleFirmwareFields()">
+                            <option value="1x">1.x Firmware (Legacy)</option>
+                            <option value="2x" selected>2.x Firmware (New)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="cbi-value">
+                    <label class="cbi-value-title">WiFi Mode</label>
+                    <div class="cbi-value-field">
+                        <select id="setup-mode" class="cbi-input-select">
+                            <option value="1">Station (Client)</option>
+                            <option value="2">AP (Access Point)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="cbi-value">
+                    <label class="cbi-value-title">SSID</label>
+                    <div class="cbi-value-field">
+                        <input type="text" id="setup-ssid" class="cbi-input-text" placeholder="Enter SSID" />
+                    </div>
+                </div>
+
+                <!-- 1.x Firmware Security Fields -->
+                <div class="cbi-value firmware-1x" style="display: none;">
+                    <label class="cbi-value-title">Security</label>
+                    <div class="cbi-value-field">
+                        <select id="setup-keymgmt" class="cbi-input-select" onchange="togglePSKField()">
+                            <option value="none">None (Open)</option>
+                            <option value="wpa-psk" selected>WPA-PSK (Password)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="cbi-value firmware-1x" id="psk-field" style="display: none;">
+                    <label class="cbi-value-title">Password (PSK)</label>
+                    <div class="cbi-value-field">
+                        <input type="text" id="setup-psk" class="cbi-input-text" placeholder="64 hexadecimal characters" maxlength="64" />
+                    </div>
+                    <div class="cbi-value-description" style="font-size: 11px; color: #999; margin-left: 200px;">Must be exactly 64 hex characters (0-9, a-f)</div>
+                </div>
+
+                <!-- 2.x Firmware Security Fields -->
+                <div class="cbi-value firmware-2x">
+                    <label class="cbi-value-title">Encryption</label>
+                    <div class="cbi-value-field">
+                        <select id="setup-encrypt" class="cbi-input-select" onchange="toggleKeyField()">
+                            <option value="0">None (Open)</option>
+                            <option value="1" selected>Encrypted</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="cbi-value firmware-2x" id="key-field">
+                    <label class="cbi-value-title">Password (Key)</label>
+                    <div class="cbi-value-field">
+                        <input type="text" id="setup-key" class="cbi-input-text" placeholder="Enter 8 character password" maxlength="8" />
+                    </div>
+                    <div class="cbi-value-description" style="font-size: 11px; color: #999; margin-left: 200px;">Must be exactly 8 characters</div>
+                </div>
+
+                <div class="cbi-value">
+                    <label class="cbi-value-title">Bandwidth</label>
+                    <div class="cbi-value-field">
+                        <select id="setup-bandwidth" class="cbi-input-select" onchange="updateChannelSuggestion()">
+                            <option value="1">1 MHz</option>
+                            <option value="2" selected>2 MHz</option>
+                            <option value="4">4 MHz</option>
+                            <option value="8">8 MHz</option>
+                        </select>
+                        <button class="btn cbi-button cbi-button-small" onclick="useRecommendedChannels()" style="min-width: 80px; margin-left: 10px;">Use Recommended</button>
+                    </div>
+                    <div class="cbi-value-description" style="font-size: 11px; color: #999; margin-left: 200px;" id="bw-suggestion">6 channels recommended for 2MHz</div>
+                </div>
+
+                <div class="cbi-value">
+                    <label class="cbi-value-title">Channel List</label>
+                    <div class="cbi-value-field">
+                        <input type="text" id="setup-channels" class="cbi-input-text" placeholder="[9050,9090,9130,9170,9210,9250]" />
+                    </div>
+                    <div class="cbi-value-description" style="font-size: 11px; color: #999; margin-left: 200px;">Comma-separated channel list in MHz (e.g., 9050,9090,9130)</div>
+                </div>
+
+                <div class="cbi-value">
+                    <div class="cbi-value-field">
+                        <button class="btn cbi-button cbi-button-save" id="apply-setup-btn" onclick="applyQuickSetup()" disabled>Apply Configuration</button>
+                        <button class="btn cbi-button cbi-button-action" id="save-config-btn" onclick="saveConfig()">💾 Save Config</button>
+                        <button class="btn cbi-button" onclick="loadConfig()">📂 Load Config</button>
+                        <span id="setup-status"></span>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+
+        <!-- Split View: Commands & NetLog -->
+        <div class="split-view">
+            <!-- Left: Command Interface -->
+            <fieldset class="cbi-section">
+                <legend>NetAT Commands</legend>
+                <div class="cbi-section-node">
+
+                    <!-- Command Input Bar -->
+                    <div class="panel-title-bar" style="margin-bottom: 15px;">
+                        <div style="display: flex; gap: 10px; align-items: center; flex: 1;">
+                            <input type="text" id="command-input" class="cbi-input-text" placeholder="at+version?" style="flex: 1; max-width: 300px;" />
+                            <button class="btn cbi-button cbi-button-apply" id="send-btn" onclick="sendCommand()" disabled>Send</button>
+                        </div>
+                    </div>
+
+                    <!-- Command Dropdowns -->
+                    <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+                        <select id="get-commands" class="cbi-input-select" onchange="selectGetCommand()" style="flex: 1;">
+                            <option value="">Get Commands...</option>
+                            <option value="at+acktmo?">acktmo?</option>
+                            <option value="at+acs_result?">acs_result?</option>
+                            <option value="at+agg_cnt?">agg_cnt?</option>
+                            <option value="at+ant_sel?">ant_sel?</option>
+                            <option value="at+aphide?">aphide?</option>
+                            <option value="at+battery_level?">battery_level?</option>
+                            <option value="at+bgrssi?">bgrssi?</option>
+                            <option value="at+bssid?">bssid?</option>
+                            <option value="at+bss_bw?">bss_bw?</option>
+                            <option value="at+center_freq?">center_freq?</option>
+                            <option value="at+channel?">channel?</option>
+                            <option value="at+chan_list?">chan_list?</option>
+                            <option value="at+conn_state?">conn_state?</option>
+                            <option value="at+dhcpc_result?">dhcpc_result?</option>
+                            <option value="at+disassoc_reason?">disassoc_reason?</option>
+                            <option value="at+dsleep?">dsleep?</option>
+                            <option value="at+encrypt?">encrypt?</option>
+                            <option value="at+freq_offset?">freq_offset?</option>
+                            <option value="at+freq_range?">freq_range?</option>
+                            <option value="at+fwinfo?">fwinfo?</option>
+                            <option value="at+key?">key?</option>
+                            <option value="at+keymgmt?">keymgmt?</option>
+                            <option value="at+lo_freq?">lo_freq?</option>
+                            <option value="at+mode?">mode?</option>
+                            <option value="at+module_type?">module_type?</option>
+                            <option value="at+nav?">nav?</option>
+                            <option value="at+psk?">psk?</option>
+                            <option value="at+reason_code?">reason_code?</option>
+                            <option value="at+roam?">roam?</option>
+                            <option value="at+rssi?">rssi?</option>
+                            <option value="at+r_key?">r_key?</option>
+                            <option value="at+r_ssid?">r_ssid?</option>
+                            <option value="at+rtc?">rtc?</option>
+                            <option value="at+scan_list?">scan_list?</option>
+                            <option value="at+signal?">signal?</option>
+                            <option value="at+ssid?">ssid?</option>
+                            <option value="at+sta_count?">sta_count?</option>
+                            <option value="at+stainfo?">stainfo?</option>
+                            <option value="at+sta_list?">sta_list?</option>
+                            <option value="at+status_code?">status_code?</option>
+                            <option value="at+syscfg?">syscfg?</option>
+                            <option value="at+temperature?">temperature?</option>
+                            <option value="at+test_start?">test_start?</option>
+                            <option value="at+txpower?">txpower?</option>
+                            <option value="at+txq_param?">txq_param?</option>
+                            <option value="at+tx_mcs?">tx_mcs?</option>
+                            <option value="at+tx_start?">tx_start?</option>
+                            <option value="at+version?">version?</option>
+                            <option value="at+wifimode?">wifimode?</option>
+                            <option value="at+wkdata_buff?">wkdata_buff?</option>
+                            <option value="at+wkreason?">wkreason?</option>
+                            <option value="at+wnbcfg?">wnbcfg?</option>
+                            <option value="at+xosc?">xosc?</option>
+                        </select>
+                        <select id="set-commands" class="cbi-input-select" onchange="selectSetCommand()" style="flex: 1;">
+                            <option value="">Set Commands...</option>
+                            <option value="at+acs=">acs=</option>
+                            <option value="at+acktmo=">acktmo=</option>
+                            <option value="at+agg_cnt=">agg_cnt=</option>
+                            <option value="at+ant_auto=">ant_auto=</option>
+                            <option value="at+ant_sel=">ant_sel=</option>
+                            <option value="at+apep_padding=">apep_padding=</option>
+                            <option value="at+aphide=">aphide=</option>
+                            <option value="at+ap_chansw=">ap_chansw=</option>
+                            <option value="at+ap_hide=">ap_hide=</option>
+                            <option value="at+aplost_time=">aplost_time=</option>
+                            <option value="at+ap_psmode=">ap_psmode=</option>
+                            <option value="at+assert_holdup=">assert_holdup=</option>
+                            <option value="at+atcmd=">atcmd=</option>
+                            <option value="at+auto_chswitch=">auto_chswitch=</option>
+                            <option value="at+auto_save=">auto_save=</option>
+                            <option value="at+autosleep_time=">autosleep_time=</option>
+                            <option value="at+beacon_int=">beacon_int=</option>
+                            <option value="at+bgrssi=">bgrssi=</option>
+                            <option value="at+blenc=">blenc=</option>
+                            <option value="at+bssid_filter=">bssid_filter=</option>
+                            <option value="at+bss_bw=">bss_bw=</option>
+                            <option value="at+bss_max_idle=">bss_max_idle=</option>
+                            <option value="at+cca_ce=">cca_ce=</option>
+                            <option value="at+cca_param=">cca_param=</option>
+                            <option value="at+channel=">channel=</option>
+                            <option value="at+chan_list=">chan_list=</option>
+                            <option value="at+clr_nav=">clr_nav=</option>
+                            <option value="at+conn_paironly=">conn_paironly=</option>
+                            <option value="at+country_region=">country_region=</option>
+                            <option value="at+custmgmt=">custmgmt=</option>
+                            <option value="at+cust_drvdata=">cust_drvdata=</option>
+                            <option value="at+dbginfo=">dbginfo=</option>
+                            <option value="at+dcdc13=">dcdc13=</option>
+                            <option value="at+dhcpc=">dhcpc=</option>
+                            <option value="at+diffcust_conn=">diffcust_conn=</option>
+                            <option value="at+disable_print=">disable_print=</option>
+                            <option value="at+disassoc_sta=">disassoc_sta=</option>
+                            <option value="at+dis_1v1m2u=">dis_1v1m2u=</option>
+                            <option value="at+dis_psconnect=">dis_psconnect=</option>
+                            <option value="at+driverdata=">driverdata=</option>
+                            <option value="at+dsleep=">dsleep=</option>
+                            <option value="at+dtim_period=">dtim_period=</option>
+                            <option value="at+dupfilter=">dupfilter=</option>
+                            <option value="at+encrypt=">encrypt=</option>
+                            <option value="at+ether_type=">ether_type=</option>
+                            <option value="at+fallback_mcs=">fallback_mcs=</option>
+                            <option value="at+fix_txrate=">fix_txrate=</option>
+                            <option value="at+frag_threshold=">frag_threshold=</option>
+                            <option value="at+freqinfo=">freqinfo=</option>
+                            <option value="at+freq_cali_period=">freq_cali_period=</option>
+                            <option value="at+freq_range=">freq_range=</option>
+                            <option value="at+fwupg=">fwupg=</option>
+                            <option value="at+heartbeat=">heartbeat=</option>
+                            <option value="at+heartbeat_int=">heartbeat_int=</option>
+                            <option value="at+heartbeat_resp=">heartbeat_resp=</option>
+                            <option value="at+heart_int=">heart_int=</option>
+                            <option value="at+hwscan=">hwscan=</option>
+                            <option value="at+iperf2=">iperf2=</option>
+                            <option value="at+joingroup=">joingroup=</option>
+                            <option value="at+join_group=">join_group=</option>
+                            <option value="at+jtag=">jtag=</option>
+                            <option value="at+key=">key=</option>
+                            <option value="at+keymgmt=">keymgmt=</option>
+                            <option value="at+loaddef=">loaddef=</option>
+                            <option value="at+lo_freq=">lo_freq=</option>
+                            <option value="at+macfilter=">macfilter=</option>
+                            <option value="at+max_txcnt=">max_txcnt=</option>
+                            <option value="at+max_txdelay=">max_txdelay=</option>
+                            <option value="at+mcast_key=">mcast_key=</option>
+                            <option value="at+mcast_txparam=">mcast_txparam=</option>
+                            <option value="at+mgmtframe=">mgmtframe=</option>
+                            <option value="at+mode=">mode=</option>
+                            <option value="at+nav_max=">nav_max=</option>
+                            <option value="at+pair=">pair=</option>
+                            <option value="at+pairing=">pairing=</option>
+                            <option value="at+paired_stas=">paired_stas=</option>
+                            <option value="at+pair_autostop=">pair_autostop=</option>
+                            <option value="at+pa_pwrctl_dis=">pa_pwrctl_dis=</option>
+                            <option value="at+ping=">ping=</option>
+                            <option value="at+primary_chan=">primary_chan=</option>
+                            <option value="at+psk=">psk=</option>
+                            <option value="at+ps_connect=">ps_connect=</option>
+                            <option value="at+ps_mode=">ps_mode=</option>
+                            <option value="at+radio_onoff=">radio_onoff=</option>
+                            <option value="at+reassoc_wkhost=">reassoc_wkhost=</option>
+                            <option value="at+reset=">reset=</option>
+                            <option value="at+reset_sta=">reset_sta=</option>
+                            <option value="at+retry_fallback_cnt=">retry_fallback_cnt=</option>
+                            <option value="at+r_key=">r_key=</option>
+                            <option value="at+roam=">roam=</option>
+                            <option value="at+roaming=">roaming=</option>
+                            <option value="at+r_psk=">r_psk=</option>
+                            <option value="at+r_ssid=">r_ssid=</option>
+                            <option value="at+rst=">rst=</option>
+                            <option value="at+rtc=">rtc=</option>
+                            <option value="at+rts_duration=">rts_duration=</option>
+                            <option value="at+rts_threshold=">rts_threshold=</option>
+                            <option value="at+scan=">scan=</option>
+                            <option value="at+sleep=">sleep=</option>
+                            <option value="at+ssid=">ssid=</option>
+                            <option value="at+standby=">standby=</option>
+                            <option value="at+super_pwr=">super_pwr=</option>
+                            <option value="at+syscfg=">syscfg=</option>
+                            <option value="at+sysdbg=">sysdbg=</option>
+                            <option value="at+test_start=">test_start=</option>
+                            <option value="at+txpower=">txpower=</option>
+                            <option value="at+tx_bw=">tx_bw=</option>
+                            <option value="at+tx_mcs=">tx_mcs=</option>
+                            <option value="at+tx_modgain=">tx_modgain=</option>
+                            <option value="at+tx_pwr_super=">tx_pwr_super=</option>
+                            <option value="at+tx_start=">tx_start=</option>
+                            <option value="at+unpair=">unpair=</option>
+                            <option value="at+user_edca=">user_edca=</option>
+                            <option value="at+version=">version=</option>
+                            <option value="at+wait_psmode=">wait_psmode=</option>
+                            <option value="at+wakeup=">wakeup=</option>
+                            <option value="at+wakeup_data=">wakeup_data=</option>
+                            <option value="at+wakeup_io=">wakeup_io=</option>
+                            <option value="at+watchdog=">watchdog=</option>
+                            <option value="at+wifimode=">wifimode=</option>
+                            <option value="at+wkdata_mask=">wkdata_mask=</option>
+                            <option value="at+wkdata_save=">wkdata_save=</option>
+                            <option value="at+wkhost_reason=">wkhost_reason=</option>
+                            <option value="at+wkio_mode=">wkio_mode=</option>
+                            <option value="at+xosc=">xosc=</option>
+                        </select>
+                    </div>
+
+                    <!-- Command Output -->
+                    <div class="cbi-value">
+                        <div class="cbi-value-field">
+                            <div id="output" class="output-terminal">Ready. Scan and select a device first...</div>
+                        </div>
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Right: NetLog Viewer -->
+            <fieldset class="cbi-section">
+                <legend>Live NetLog Viewer</legend>
+                <div class="cbi-section-node">
+
+                    <div class="panel-title-bar">
+                        <div>
+                            <button class="btn cbi-button cbi-button-positive" id="start-netlog-btn" onclick="startNetlog()" disabled>Start NetLog</button>
+                            <button class="btn cbi-button cbi-button-negative" id="stop-netlog-btn" onclick="stopNetlog()" disabled>Stop</button>
+                            <button class="btn cbi-button" onclick="clearNetlog()">Clear</button>
+                            <span id="netlog-status" class="status-badge">Stopped</span>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px;">
+                                <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+                            </label>
+                            <span id="log-count" style="margin-left: 10px; font-size: 12px;">0 lines</span>
+                        </div>
+                    </div>
+
+                    <div class="cbi-value">
+                        <div class="cbi-value-field">
+                            <div id="netlog-viewer" class="output-terminal netlog-terminal">
+Waiting to start NetLog...
+
+Instructions:
+1. Scan and select a device above
+2. Click "Start NetLog"
+3. Logs will appear here in real-time
+4. Send commands on the left while monitoring
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </fieldset>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentInterface = null;
+    let selectedDevice = null;
+    let netlogActive = false;
+    let pollInterval = null;
+    let pairingTimer = null;
+    let pairingCountdown = 0;
+    let logLineCount = 0;
+    let lastLogContent = '';
+
+    window.addEventListener('DOMContentLoaded', function() {
+        loadInterfaces();
+        loadConfig(true); // Auto-load saved config on page load (silent)
+
+        document.getElementById('command-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !document.getElementById('send-btn').disabled) {
+                sendCommand();
+            }
+        });
+
+        // Update pair button when mode changes
+        document.getElementById('setup-mode').addEventListener('change', function() {
+            updatePairButton();
+        });
+    });
+
+    function loadInterfaces() {
+        fetch('<%=url("admin/network/taixintools/get_interfaces")%>')
+            .then(response => response.json())
+            .then(data => {
+                const select = document.getElementById('interface-select');
+                select.innerHTML = '';
+
+                data.interfaces.forEach(iface => {
+                    const option = document.createElement('option');
+                    option.value = iface;
+                    option.textContent = iface;
+                    select.appendChild(option);
+                });
+
+                if (data.default_interface) {
+                    select.value = data.default_interface;
+                    currentInterface = data.default_interface;
+                    updateInterfaceStatus(data.has_hg0);
+                } else if (data.interfaces.length > 0) {
+                    currentInterface = data.interfaces[0];
+                    select.value = currentInterface;
+                    updateInterfaceStatus(false);
+                }
+
+                select.addEventListener('change', function() {
+                    currentInterface = this.value;
+                    updateInterfaceStatus(this.value === 'hg0');
+                    clearDeviceList();
+                });
+            });
+    }
+
+    function updateInterfaceStatus(isHg0) {
+        const status = document.getElementById('interface-status');
+        status.className = 'status-badge ' + (isHg0 ? 'status-success' : 'status-warning');
+        status.textContent = isHg0 ? 'hg0 detected' : 'Manual';
+    }
+
+    function clearDeviceList() {
+        selectedDevice = null;
+        document.getElementById('device-list').innerHTML = '<div class="no-devices">Click "Scan for Devices"</div>';
+        document.getElementById('send-btn').disabled = true;
+        document.getElementById('apply-setup-btn').disabled = true;
+        document.getElementById('pair-btn').disabled = true;
+        document.getElementById('start-netlog-btn').disabled = true;
+        document.getElementById('device-warning').style.display = 'block';
+    }
+
+    function scanDevices() {
+        if (!currentInterface) {
+            alert('Please select an interface first');
+            return;
+        }
+
+        const btn = document.getElementById('scan-btn');
+        const status = document.getElementById('scan-status');
+        btn.disabled = true;
+        btn.textContent = 'Scanning...';
+
+        const formData = new FormData();
+        formData.append('interface', currentInterface);
+
+        fetch('<%=url("admin/network/taixintools/scan_devices")%>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.devices && data.devices.length > 0) {
+                displayDevices(data.devices);
+                status.textContent = 'Found ' + data.devices.length;
+            } else {
+                clearDeviceList();
+                status.textContent = 'No devices found';
+            }
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.textContent = 'Scan for Devices';
+        });
+    }
+
+    function displayDevices(devices) {
+        const deviceList = document.getElementById('device-list');
+        deviceList.innerHTML = '';
+
+        devices.forEach(mac => {
+            const item = document.createElement('div');
+            item.className = 'device-item';
+            item.textContent = mac;
+            item.onclick = function() { selectDevice(mac, item); };
+            deviceList.appendChild(item);
+        });
+
+        if (devices.length > 0) {
+            selectDevice(devices[0], deviceList.firstChild);
+        }
+    }
+
+    function selectDevice(mac, element) {
+        document.querySelectorAll('.device-item').forEach(item => {
+            item.classList.remove('selected');
+        });
+
+        element.classList.add('selected');
+        selectedDevice = mac;
+        document.getElementById('send-btn').disabled = false;
+        document.getElementById('apply-setup-btn').disabled = false;
+        document.getElementById('start-netlog-btn').disabled = false;
+        document.getElementById('device-warning').style.display = 'none';
+
+        updatePairButton();
+        appendOutput('Selected: ' + mac);
+    }
+
+    function updatePairButton() {
+        const mode = document.getElementById('setup-mode').value;
+        document.getElementById('pair-btn').disabled = !selectedDevice || mode !== '1';
+    }
+
+    function toggleFirmwareFields() {
+        const version = document.getElementById('firmware-version').value;
+        const is1x = version === '1x';
+
+        // Toggle firmware-specific fields
+        document.querySelectorAll('.firmware-1x').forEach(el => {
+            el.style.display = is1x ? 'block' : 'none';
+        });
+        document.querySelectorAll('.firmware-2x').forEach(el => {
+            el.style.display = is1x ? 'none' : 'block';
+        });
+
+        // Call appropriate toggle functions
+        if (is1x) {
+            togglePSKField();
+        } else {
+            toggleKeyField();
+        }
+    }
+
+    function togglePSKField() {
+        const keymgmt = document.getElementById('setup-keymgmt').value;
+        document.getElementById('psk-field').style.display = keymgmt === 'none' ? 'none' : 'block';
+    }
+
+    function toggleKeyField() {
+        const encrypt = document.getElementById('setup-encrypt').value;
+        document.getElementById('key-field').style.display = encrypt === '0' ? 'none' : 'block';
+    }
+
+    function updateChannelSuggestion() {
+        const bw = document.getElementById('setup-bandwidth').value;
+        const suggestions = {
+            '1': '6 channels recommended for 1MHz (e.g., 9055,9095,9135,9175,9215,9255)',
+            '2': '6 channels recommended for 2MHz (e.g., 9050,9090,9130,9170,9210,9250)',
+            '4': '5 channels recommended for 4MHz (e.g., 9060,9100,9140,9180,9220)',
+            '8': '3 channels for 8MHz (e.g., 9080,9160,9240)'
+        };
+        document.getElementById('bw-suggestion').textContent = suggestions[bw];
+    }
+
+    function useRecommendedChannels() {
+        const bw = document.getElementById('setup-bandwidth').value;
+        const recommended = {
+            '1': '9055,9095,9135,9175,9215,9255',
+            '2': '9050,9090,9130,9170,9210,9250',
+            '4': '9060,9100,9140,9180,9220',
+            '8': '9080,9160,9240'
+        };
+        document.getElementById('setup-channels').value = recommended[bw];
+    }
+
+    function selectGetCommand() {
+        const select = document.getElementById('get-commands');
+        if (select.value) {
+            document.getElementById('command-input').value = select.value;
+            select.selectedIndex = 0;
+        }
+    }
+
+    function selectSetCommand() {
+        const select = document.getElementById('set-commands');
+        if (select.value) {
+            document.getElementById('command-input').value = select.value;
+            document.getElementById('command-input').focus();
+            select.selectedIndex = 0;
+        }
+    }
+
+    function insertCommand(cmd) {
+        document.getElementById('command-input').value = cmd;
+        document.getElementById('command-input').focus();
+    }
+
+    async function applyQuickSetup() {
+        if (!selectedDevice || !currentInterface) {
+            alert('Please scan and select a device first');
+            return;
+        }
+
+        const firmwareVersion = document.getElementById('firmware-version').value;
+        const mode = document.getElementById('setup-mode').value;
+        const ssid = document.getElementById('setup-ssid').value.trim();
+        const bandwidth = document.getElementById('setup-bandwidth').value;
+        const channels = document.getElementById('setup-channels').value.trim();
+
+        if (!ssid) {
+            alert('Please enter an SSID');
+            return;
+        }
+
+        const btn = document.getElementById('apply-setup-btn');
+        btn.disabled = true;
+        btn.textContent = 'Applying...';
+
+        appendOutput('\n=== Quick Setup (' + firmwareVersion + ') ===');
+        appendOutput('Bandwidth: ' + bandwidth + 'MHz');
+        appendOutput('SSID: ' + ssid);
+
+        try {
+            // Set bandwidth first (both firmware versions)
+            await sendCommandDirect('at+bss_bw=' + bandwidth);
+            await sleep(500);
+
+            // Set channel list if provided (both firmware versions)
+            if (channels) {
+                const channelList = '[' + channels.replace(/[\[\]]/g, '') + ']';
+                await sendCommandDirect('at+chan_list=' + channelList);
+                await sleep(500);
+            }
+
+            if (firmwareVersion === '1x') {
+                // 1.x Firmware commands
+                const keymgmt = document.getElementById('setup-keymgmt').value;
+                const psk = document.getElementById('setup-psk').value;
+
+                // Validate PSK: must be exactly 64 hex characters
+                if (keymgmt === 'wpa-psk') {
+                    if (psk.length !== 64) {
+                        alert('PSK must be exactly 64 characters');
+                        btn.disabled = false;
+                        btn.textContent = 'Apply Configuration';
+                        return;
+                    }
+                    if (!/^[0-9a-fA-F]{64}$/.test(psk)) {
+                        alert('PSK must be hexadecimal (0-9, a-f)');
+                        btn.disabled = false;
+                        btn.textContent = 'Apply Configuration';
+                        return;
+                    }
+                }
+
+                appendOutput('Mode: ' + (mode === '1' ? 'Station' : 'AP'));
+                await sendCommandDirect('at+mode=' + mode);
+                await sleep(500);
+                await sendCommandDirect('at+ssid=' + ssid);
+                await sleep(500);
+                await sendCommandDirect('at+keymgmt=' + keymgmt);
+                await sleep(500);
+
+                if (keymgmt === 'wpa-psk') {
+                    await sendCommandDirect('at+psk=' + psk);
+                    await sleep(500);
+                }
+            } else {
+                // 2.x Firmware commands
+                const encrypt = document.getElementById('setup-encrypt').value;
+                const key = document.getElementById('setup-key').value;
+                const wifimode = mode === '1' ? 'sta' : 'ap';
+
+                // Validate key: must be exactly 8 characters
+                if (encrypt === '1') {
+                    if (key.length !== 8) {
+                        alert('Key must be exactly 8 characters');
+                        btn.disabled = false;
+                        btn.textContent = 'Apply Configuration';
+                        return;
+                    }
+                }
+
+                appendOutput('WiFi Mode: ' + wifimode);
+                await sendCommandDirect('at+ssid=' + ssid);
+                await sleep(500);
+                await sendCommandDirect('at+encrypt=' + encrypt);
+                await sleep(500);
+
+                if (encrypt === '1') {
+                    await sendCommandDirect('at+key=' + key);
+                    await sleep(500);
+                }
+
+                await sendCommandDirect('at+wifimode=' + wifimode);
+                await sleep(500);
+            }
+
+            appendOutput('✓ Configuration complete!');
+        } catch (error) {
+            appendOutput('✗ Error: ' + error);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Apply Configuration';
+        }
+    }
+
+    async function startPairing() {
+        if (!selectedDevice || !currentInterface) return;
+
+        const btn = document.getElementById('pair-btn');
+        const status = document.getElementById('pair-status');
+        btn.disabled = true;
+        status.style.display = 'inline-block';
+        status.className = 'status-badge status-pairing';
+
+        appendOutput('\n=== Quick Pair ===');
+
+        try {
+            await sendCommandDirect('at+pair=1');
+            pairingCountdown = 20;
+            status.textContent = 'Pairing: ' + pairingCountdown + 's';
+
+            pairingTimer = setInterval(() => {
+                pairingCountdown--;
+                status.textContent = 'Pairing: ' + pairingCountdown + 's';
+                if (pairingCountdown <= 0) stopPairing();
+            }, 1000);
+        } catch (error) {
+            appendOutput('✗ Pairing error: ' + error);
+            btn.disabled = false;
+            status.style.display = 'none';
+        }
+    }
+
+    async function stopPairing() {
+        if (pairingTimer) {
+            clearInterval(pairingTimer);
+            pairingTimer = null;
+        }
+
+        try {
+            await sendCommandDirect('at+pair=0');
+            appendOutput('Pairing stopped');
+        } catch (error) {
+            appendOutput('✗ Error stopping: ' + error);
+        }
+
+        document.getElementById('pair-btn').disabled = false;
+        document.getElementById('pair-status').style.display = 'none';
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function sendCommandDirect(command) {
+        return new Promise((resolve, reject) => {
+            const formData = new FormData();
+            formData.append('command', command);
+            formData.append('interface', currentInterface);
+            formData.append('device', selectedDevice);
+
+            fetch('<%=url("admin/network/taixintools/send_command")%>', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    appendOutput('> ' + command);
+                    if (data.output) appendOutput(data.output);
+                    resolve(data);
+                } else {
+                    reject(data.error || 'Unknown error');
+                }
+            })
+            .catch(error => reject(error));
+        });
+    }
+
+    function sendCommand() {
+        const command = document.getElementById('command-input').value.trim();
+        if (!command || !selectedDevice || !currentInterface) return;
+
+        const btn = document.getElementById('send-btn');
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+
+        sendCommandDirect(command)
+            .catch(error => appendOutput('✗ Error: ' + error))
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = 'Send';
+            });
+    }
+
+    function appendOutput(text) {
+        const output = document.getElementById('output');
+        if (output.textContent.includes('Ready. Scan')) {
+            output.textContent = text;
+        } else {
+            output.textContent += '\n' + text;
+        }
+        output.scrollTop = output.scrollHeight;
+    }
+
+    // NetLog Functions
+    function startNetlog() {
+        if (!selectedDevice || !currentInterface) {
+            alert('Please scan and select a device first');
+            return;
+        }
+
+        const btn = document.getElementById('start-netlog-btn');
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+
+        const formData = new FormData();
+        formData.append('interface', currentInterface);
+        formData.append('device', selectedDevice);
+
+        fetch('<%=url("admin/network/taixintools/start_netlog")%>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                netlogActive = true;
+                updateNetlogStatus(true);
+                document.getElementById('stop-netlog-btn').disabled = false;
+                appendNetlog('NetLog started for: ' + selectedDevice);
+                startPolling();
+            } else {
+                appendNetlog('✗ Failed to start: ' + (data.error || data.output));
+                btn.disabled = false;
+            }
+        })
+        .finally(() => {
+            btn.textContent = 'Start NetLog';
+        });
+    }
+
+    function stopNetlog() {
+        const btn = document.getElementById('stop-netlog-btn');
+        btn.disabled = true;
+
+        fetch('<%=url("admin/network/taixintools/stop_netlog")%>', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            netlogActive = false;
+            updateNetlogStatus(false);
+            stopPolling();
+            document.getElementById('start-netlog-btn').disabled = false;
+            appendNetlog('NetLog stopped');
+        })
+        .finally(() => {
+            btn.disabled = true;
+        });
+    }
+
+    function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(fetchLogs, 1000);
+        fetchLogs();
+    }
+
+    function stopPolling() {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    }
+
+    function fetchLogs() {
+        if (!netlogActive) return;
+
+        fetch('<%=url("admin/network/taixintools/get_netlog")%>')
+            .then(response => response.json())
+            .then(data => {
+                if (data.logs && data.logs !== lastLogContent) {
+                    const viewer = document.getElementById('netlog-viewer');
+                    if (viewer.textContent.includes('Waiting to start')) {
+                        viewer.textContent = '';
+                    }
+                    viewer.textContent = data.logs;
+                    logLineCount = data.logs.split('\n').length;
+                    document.getElementById('log-count').textContent = logLineCount + ' lines';
+                    lastLogContent = data.logs;
+
+                    if (document.getElementById('auto-scroll').checked) {
+                        viewer.scrollTop = viewer.scrollHeight;
+                    }
+                }
+            });
+    }
+
+    function clearNetlog() {
+        document.getElementById('netlog-viewer').textContent = '';
+        logLineCount = 0;
+        lastLogContent = '';
+        document.getElementById('log-count').textContent = '0 lines';
+    }
+
+    function appendNetlog(text) {
+        const viewer = document.getElementById('netlog-viewer');
+        if (viewer.textContent.includes('Waiting to start')) {
+            viewer.textContent = '';
+        }
+        const timestamp = new Date().toLocaleTimeString();
+        viewer.textContent += '[' + timestamp + '] ' + text + '\n';
+        logLineCount++;
+        document.getElementById('log-count').textContent = logLineCount + ' lines';
+
+        if (document.getElementById('auto-scroll').checked) {
+            viewer.scrollTop = viewer.scrollHeight;
+        }
+    }
+
+    function updateNetlogStatus(active) {
+        const status = document.getElementById('netlog-status');
+        const viewer = document.getElementById('netlog-viewer');
+
+        if (active) {
+            status.className = 'status-badge status-success';
+            status.textContent = 'Running';
+            viewer.classList.add('active');
+        } else {
+            status.className = 'status-badge status-danger';
+            status.textContent = 'Stopped';
+            viewer.classList.remove('active');
+        }
+    }
+
+    // Config Save/Load Functions
+    function saveConfig() {
+        const firmwareVersion = document.getElementById('firmware-version').value;
+        const mode = document.getElementById('setup-mode').value;
+        const ssid = document.getElementById('setup-ssid').value.trim();
+        const keymgmt = document.getElementById('setup-keymgmt').value;
+        const psk = document.getElementById('setup-psk').value;
+        const encrypt = document.getElementById('setup-encrypt').value;
+        const key = document.getElementById('setup-key').value;
+        const bandwidth = document.getElementById('setup-bandwidth').value;
+        const channels = document.getElementById('setup-channels').value.trim();
+
+        if (!ssid) {
+            alert('Please enter an SSID to save');
+            return;
+        }
+
+        const btn = document.getElementById('save-config-btn');
+        const status = document.getElementById('setup-status');
+        btn.disabled = true;
+
+        const formData = new FormData();
+        formData.append('firmware_version', firmwareVersion);
+        formData.append('mode', mode);
+        formData.append('ssid', ssid);
+        formData.append('keymgmt', keymgmt);
+        formData.append('psk', psk);
+        formData.append('encrypt', encrypt);
+        formData.append('key', key);
+        formData.append('bandwidth', bandwidth);
+        formData.append('channels', channels);
+        formData.append('device', selectedDevice || '');
+
+        fetch('<%=url("admin/network/taixintools/save_config")%>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                status.textContent = '✓ Configuration saved to UCI';
+                status.style.color = '#5cb85c';
+                setTimeout(() => { status.textContent = ''; }, 3000);
+            } else {
+                status.textContent = '✗ Save failed: ' + (data.error || 'Unknown error');
+                status.style.color = '#d9534f';
+            }
+        })
+        .catch(error => {
+            status.textContent = '✗ Error: ' + error;
+            status.style.color = '#d9534f';
+        })
+        .finally(() => {
+            btn.disabled = false;
+        });
+    }
+
+    function loadConfig(silent = false) {
+        const status = document.getElementById('setup-status');
+
+        fetch('<%=url("admin/network/taixintools/load_config")%>')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.config) {
+                const config = data.config;
+
+                document.getElementById('firmware-version').value = config.firmware_version || '2x';
+                document.getElementById('setup-mode').value = config.mode || '1';
+                document.getElementById('setup-ssid').value = config.ssid || '';
+                document.getElementById('setup-keymgmt').value = config.keymgmt || 'wpa-psk';
+                document.getElementById('setup-psk').value = config.psk || '';
+                document.getElementById('setup-encrypt').value = config.encrypt || '1';
+                document.getElementById('setup-key').value = config.key || '';
+                document.getElementById('setup-bandwidth').value = config.bandwidth || '2';
+                document.getElementById('setup-channels').value = config.channels || '';
+
+                toggleFirmwareFields();
+                updateChannelSuggestion();
+                updatePairButton();
+
+                // Only show status if not silent and config has data
+                if (!silent && config.ssid) {
+                    status.textContent = '✓ Configuration loaded';
+                    status.style.color = '#5cb85c';
+                    setTimeout(() => { status.textContent = ''; }, 3000);
+                }
+
+                if (!silent && config.last_device) {
+                    appendOutput('Last used device: ' + config.last_device);
+                }
+            } else if (!silent) {
+                status.textContent = '✗ Load failed';
+                status.style.color = '#d9534f';
+            }
+        })
+        .catch(error => {
+            if (!silent) {
+                status.textContent = '✗ Error: ' + error;
+                status.style.color = '#d9534f';
+            }
+        });
+    }
+
+    window.addEventListener('beforeunload', function() {
+        if (netlogActive) stopPolling();
+    });
+</script>
+
+<%+footer%>

@@ -13,7 +13,12 @@ import threading
 from datetime import datetime
 
 # Version information
-__version__ = "2.0.2"  
+VERSION_FILE = os.path.join(os.path.dirname(__file__), ".version")
+try:
+    with open(VERSION_FILE, "r") as vf:
+        __version__ = vf.read().strip()
+except Exception:
+    __version__ = "0.0.0"
 
 # Try to import autoupdate module
 try:
@@ -245,9 +250,8 @@ class ScapyNetAtMgr:
         # First try using the display callback for UI integration
         if hasattr(self, 'netlog_display_callback') and callable(self.netlog_display_callback):
             try:
-                # Add timestamp to the message
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                self.netlog_display_callback(f"[{timestamp}] {message}")
+                # Don't add timestamp - the UI will add it
+                self.netlog_display_callback(message)
                 return  # Successfully used callback
             except Exception as e:
                 if self.debug:
@@ -394,26 +398,92 @@ class ScapyNetAtMgr:
         return self.log_file
 
     def start_packet_capture(self):
-        if self.capture_thread and self.capture_thread.is_alive():
+        # Start NetAT packet capture thread
+        self._start_netat_packet_capture()
+        
+        # If netlog is active, make sure the netlog packet capture is running
+        if getattr(self, 'netlog_active', False):
+            self._start_netlog_packet_capture()
+        
+        # Sleep briefly to allow threads to start
+        time.sleep(0.2)
+    
+    def _start_netat_packet_capture(self):
+        """Start a dedicated packet capture thread for NetAT packets only"""
+        if hasattr(self, 'netat_capture_thread') and self.netat_capture_thread and self.netat_capture_thread.is_alive():
             return
+            
+        if not hasattr(self, 'stop_capture'):
+            self.stop_capture = threading.Event()
             
         self.stop_capture.clear()
         self.captured_packets = []
         
-        def capture_worker():
+        def netat_capture_worker():
             try:
-                # Create BPF filters for both NetAT and Netlog packets
+                # Filter for NetAT packets only
                 netat_filter = f"udp port {self.port}"
-                netlog_filter = f"udp port {NETLOG_PORT}"
-                combined_filter = f"({netat_filter}) or ({netlog_filter})"
                 
                 if self.debug:
-                    print(f"Starting packet capture on {self.ifname}")
-                    print(f"  Filter: {combined_filter}")
+                    print(f"Starting NetAT packet capture on {self.ifname}")
+                    print(f"  Filter: {netat_filter}")
                     print(f"  Interface: {self.ifname} ({self.interface_ip})")
                 
-                def packet_handler(packet):
+                def netat_packet_handler(packet):
                     if self.stop_capture.is_set():
+                        return True
+                    
+                    if packet.haslayer(UDP):
+                        udp_layer = packet[UDP]
+                        
+                        # Store NetAT packets for later processing
+                        if (udp_layer.dport == self.port or udp_layer.sport == self.port) and packet.haslayer(Raw):
+                            # Skip packets we sent ourselves
+                            if packet.haslayer(IP) and packet[IP].src == self.interface_ip:
+                                if self.debug:
+                                    print(f"Skipping our own packet to {packet[IP].dst}")
+                                return
+                                
+                            self.captured_packets.append(packet)
+                            if self.debug:
+                                src_ip = packet[IP].src if packet.haslayer(IP) else "unknown"
+                                print(f"Captured NETAT: {len(udp_layer.payload)} bytes from {src_ip}:{udp_layer.sport}")
+                
+                # Use store=0 and continuous sniffing
+                sniff(iface=self.ifname, filter=netat_filter, prn=netat_packet_handler, 
+                      stop_filter=lambda p: self.stop_capture.is_set(), store=0)
+                      
+            except Exception as e:
+                if self.debug:
+                    print(f"NetAT packet capture error: {e}")
+                    print("This may be normal - some systems require sudo for packet capture")
+                logging.error(f"NetAT packet capture error: {e}")
+        
+        self.netat_capture_thread = threading.Thread(target=netat_capture_worker, daemon=True)
+        self.netat_capture_thread.start()
+    
+    def _start_netlog_packet_capture(self):
+        """Start a dedicated packet capture thread for NetLog packets only"""
+        if hasattr(self, 'netlog_capture_thread') and self.netlog_capture_thread and self.netlog_capture_thread.is_alive():
+            return
+            
+        # Use a separate stop event for netlog
+        if not hasattr(self, 'netlog_stop_capture'):
+            self.netlog_stop_capture = threading.Event()
+        self.netlog_stop_capture.clear()
+        
+        def netlog_capture_worker():
+            try:
+                # Filter for NetLog packets only
+                netlog_filter = f"udp port {NETLOG_PORT}"
+                
+                if self.debug:
+                    print(f"Starting dedicated NetLog packet capture on {self.ifname}")
+                    print(f"  Filter: {netlog_filter}")
+                    print(f"  Interface: {self.ifname} ({self.interface_ip})")
+                
+                def netlog_packet_handler(packet):
+                    if self.netlog_stop_capture.is_set():
                         return True
                     
                     if packet.haslayer(UDP):
@@ -434,38 +504,38 @@ class ScapyNetAtMgr:
                             except Exception as e:
                                 if self.debug:
                                     print(f"Error processing NETLOG packet: {e}")
-                        
-                        # Store NetAT packets for later processing
-                        elif udp_layer.dport == self.port or udp_layer.sport == self.port:
-                            # Skip packets we sent ourselves
-                            if packet.haslayer(IP) and packet[IP].src == self.interface_ip:
-                                if self.debug:
-                                    print(f"Skipping our own packet to {packet[IP].dst}")
-                                return
-                                
-                            self.captured_packets.append(packet)
-                            if self.debug:
-                                src_ip = packet[IP].src if packet.haslayer(IP) else "unknown"
-                                print(f"Captured NETAT: {len(udp_layer.payload)} bytes from {src_ip}:{udp_layer.sport}")
                 
-                # Use store=0 and continuous sniffing like the original netlog.py
-                sniff(iface=self.ifname, filter=combined_filter, prn=packet_handler, 
-                      stop_filter=lambda p: self.stop_capture.is_set(), store=0)
+                # Use store=0 and continuous sniffing
+                sniff(iface=self.ifname, filter=netlog_filter, prn=netlog_packet_handler, 
+                      stop_filter=lambda p: self.netlog_stop_capture.is_set(), store=0)
                       
             except Exception as e:
                 if self.debug:
-                    print(f"Packet capture error: {e}")
+                    print(f"NetLog packet capture error: {e}")
                     print("This may be normal - some systems require sudo for packet capture")
-                logging.error(f"Packet capture error: {e}")
+                logging.error(f"NetLog packet capture error: {e}")
         
-        self.capture_thread = threading.Thread(target=capture_worker, daemon=True)
-        self.capture_thread.start()
-        time.sleep(0.2)
+        self.netlog_capture_thread = threading.Thread(target=netlog_capture_worker, daemon=True)
+        self.netlog_capture_thread.start()
 
     def stop_packet_capture(self):
-        self.stop_capture.set()
-        if self.capture_thread:
+        # Stop NetAT packet capture
+        if hasattr(self, 'stop_capture'):
+            self.stop_capture.set()
+        
+        if hasattr(self, 'netat_capture_thread') and self.netat_capture_thread:
+            self.netat_capture_thread.join(timeout=2)
+            
+        # For backward compatibility with existing code
+        if hasattr(self, 'capture_thread') and self.capture_thread:
             self.capture_thread.join(timeout=2)
+        
+        # Stop NetLog packet capture if running
+        if hasattr(self, 'netlog_stop_capture'):
+            self.netlog_stop_capture.set()
+            
+        if hasattr(self, 'netlog_capture_thread') and self.netlog_capture_thread:
+            self.netlog_capture_thread.join(timeout=2)
             
     def start_netlog(self, specific_mac=None):
         if self.netlog_active:
@@ -506,15 +576,15 @@ class ScapyNetAtMgr:
             else:
                 print(f"Warning: Invalid MAC address format for netlog. Using broadcast discovery.")
         
-        # Start packet capture if not already running
-        if not self.capture_thread or not self.capture_thread.is_alive():
-            self.start_packet_capture()
-        else:
-            if self.debug:
-                print("Packet capture already running")
-            
-        # Start the netlog worker thread
+        # Mark netlog as active first
         self.netlog_active = True
+        
+        # Make sure NetAT packet capture is running if needed
+        if not hasattr(self, 'netat_capture_thread') or not self.netat_capture_thread.is_alive():
+            self._start_netat_packet_capture()
+            
+        # Start the dedicated netlog packet capture thread
+        self._start_netlog_packet_capture()
         
         def netlog_worker():
             # Use the exact same constants as in the original netlog.py
@@ -590,9 +660,11 @@ class ScapyNetAtMgr:
             return
             
         print("Stopping netlog...")
+        
+        # Stop the main netlog worker thread
         self.netlog_stop.set()
         
-        # Give the thread a chance to exit gracefully
+        # Give the main thread a chance to exit gracefully
         if self.netlog_thread and self.netlog_thread.is_alive():
             try:
                 self.netlog_thread.join(timeout=2)
@@ -603,13 +675,28 @@ class ScapyNetAtMgr:
                 if self.debug:
                     print(f"Error stopping netlog thread: {e}")
         
+        # Stop the dedicated netlog packet capture thread
+        if hasattr(self, 'netlog_stop_capture'):
+            self.netlog_stop_capture.set()
+            
+        if hasattr(self, 'netlog_capture_thread') and self.netlog_capture_thread:
+            try:
+                self.netlog_capture_thread.join(timeout=2)
+                if self.netlog_capture_thread.is_alive() and self.debug:
+                    print("Netlog packet capture thread did not exit within timeout")
+            except Exception as e:
+                if self.debug:
+                    print(f"Error stopping netlog packet capture thread: {e}")
+        
         # Reset state
         self.netlog_active = False
         self.netlog_device_discovered = False
         self._heartbeat_count = 0 if hasattr(self, '_heartbeat_count') else 0
         
-        # Clear any captured packets to avoid processing stale data
-        self.captured_packets = []
+        # Only clear netlog packets, preserve NetAT packets
+        if hasattr(self, 'captured_packets'):
+            self.captured_packets = [p for p in self.captured_packets 
+                                   if not (p.haslayer(UDP) and p[UDP].dport == NETLOG_PORT)]
         
         print("Netlog stopped")
             
@@ -757,6 +844,9 @@ class ScapyNetAtMgr:
                 send(udp_packet, verbose=0)
             except Exception as e2:
                 self.log_netlog(f"Error sending heartbeat via fallback method: {e2}", debug_only=True)
+        
+        # Always return None explicitly to avoid any implicit return values
+        return None
                 
     def process_netlog_packet(self, netlog_pkt, packet):
         if not packet.haslayer(IP):
@@ -1060,7 +1150,12 @@ class ScapyNetAtMgr:
         return success_count > 0  # Return True if at least one packet was sent successfully
 
     def netat_send(self, atcmd, retries=2, retry_delay=0.2):
-        self.captured_packets.clear()
+        # Save the netlog state
+        was_netlog_active = getattr(self, 'netlog_active', False)
+        
+        # Clear only NetAT packets, not any netlog packets
+        self.captured_packets = [p for p in self.captured_packets 
+                               if not (p.haslayer(UDP) and p[UDP].dport == self.port)]
         
         cmd = WnbNetatCmd(WNB_NETAT_CMD_AT_REQ, self.dest, self.cookie, atcmd.encode())
         packet_data = cmd.to_bytes()
@@ -1076,6 +1171,15 @@ class ScapyNetAtMgr:
             self.send_packet(packet_data, unicast=is_unicast)
             if i < retries - 1:
                 time.sleep(retry_delay)
+        
+        # If netlog was active, make sure we send a heartbeat to keep it active
+        if was_netlog_active and self.netlog_device_discovered:
+            try:
+                # Call but ignore any return value to prevent "True" from appearing in output
+                _ = self.send_netlog_heartbeat()
+            except Exception as e:
+                if self.debug:
+                    print(f"Error sending heartbeat after NetAT command: {e}")
         
         logging.info(f"Sent NETAT command: {atcmd} (unicast) with {retries} retries")
 
