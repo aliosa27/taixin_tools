@@ -361,3 +361,21 @@ copy the configs in etc to etc on your host.
 
 python server.py 
 and you should be good to go!
+
+
+
+
+## Licensing
+
+This project is licensed under the Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0).
+
+You are free to use, modify, and distribute this software for non-commercial purposes, provided that proper attribution is given.
+
+### Commercial Use
+
+Commercial use of this software is NOT permitted under the default license.
+
+If you wish to use this software in a commercial product, service, or environment, you must obtain a commercial license.
+
+For commercial licensing inquiries, contact:
+aliosa27@aliosa27.me
