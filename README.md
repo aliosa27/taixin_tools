@@ -1,3 +1,6 @@
+Updated tool and firmware at 
+https://github.com/aliosa27/taixin-halow-bridge/
+
 # Taixin LibNetat Tool v2.0 
 ## Overview
 
